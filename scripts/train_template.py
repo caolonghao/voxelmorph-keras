@@ -35,6 +35,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--load-weights', help='optional weights file to initialise with')
     parser.add_argument('--initial-epoch', type=int, default=0, help='initial epoch number (default: 0)')
     parser.add_argument('--lr', type=float, default=1e-4, help='learning rate (default: 1e-4)')
+    parser.add_argument('--save-freq', type=int, default=1, help='save checkpoint every N epochs (default: 1)')
 
     parser.add_argument('--enc', type=int, nargs='+', help='list of unet encoder filters (default: 16 32 32 32)')
     parser.add_argument('--dec', type=int, nargs='+', help='list of unet decoder filters (default: 32 32 32 32 32 16 16)')
@@ -144,7 +145,8 @@ def main():
     compile_model(model, args)
 
     checkpoint_pattern = os.path.join(args.model_dir, 'weights_epoch_{epoch:04d}.weights.h5')
-    checkpoint_cb = callbacks.ModelCheckpoint(filepath=checkpoint_pattern, save_weights_only=True, save_freq='epoch')
+    save_freq_val = 'epoch' if args.save_freq <= 1 else args.steps_per_epoch * args.save_freq
+    checkpoint_cb = callbacks.ModelCheckpoint(filepath=checkpoint_pattern, save_weights_only=True, save_freq=save_freq_val)
 
     if args.initial_epoch == 0:
         cli.save_weights(model, checkpoint_pattern.format(epoch=0))
