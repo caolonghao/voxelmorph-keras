@@ -1,13 +1,36 @@
 # third party imports
 import numpy as np
-import tensorflow as tf
+import torch
 
 # local imports
 import neurite as ne
 from . import utils
 
+def _resolve_dtype(dtype):
+    if isinstance(dtype, torch.dtype):
+        return dtype
+    if isinstance(dtype, str):
+        mapping = {
+            'float16': torch.float16,
+            'float32': torch.float32,
+            'float64': torch.float64,
+        }
+        return mapping.get(dtype.lower(), torch.float32)
+    try:
+        return torch.as_tensor([], dtype=dtype).dtype
+    except TypeError:
+        return torch.float32
 
-def draw_flip_matrix(grid_shape, shift_center=True, last_row=True, dtype=tf.float32, seed=None):
+
+def _make_generator(seed=None, device='cpu'):
+    if seed is None:
+        return torch.Generator(device=device)
+    generator = torch.Generator(device=device)
+    generator.manual_seed(int(seed))
+    return generator
+
+
+def draw_flip_matrix(grid_shape, shift_center=True, last_row=True, dtype=torch.float32, seed=None):
     """
     Draw a matrix transform that randomly flips axes of N-dimensional space.
 
@@ -28,33 +51,31 @@ def draw_flip_matrix(grid_shape, shift_center=True, last_row=True, dtype=tf.floa
         SPIE Medical Imaging: Image Processing, 12464, p 1246402, 2023
         https://doi.org/10.1117/12.2653251
     """
-    dtype = tf.dtypes.as_dtype(dtype)
+    dtype = _resolve_dtype(dtype)
     ndims = len(grid_shape)
-    grid_shape = tf.constant(grid_shape, dtype=dtype)
+    device = 'cpu'
+    generator = _make_generator(seed, device=device)
 
-    # Decide which axes to flip.
-    rand_bit = tf.greater(tf.random.normal(shape=(ndims,), seed=seed), 0)
-    rand_bit = tf.cast(rand_bit, dtype)
-    diag = tf.pow(tf.cast(-1, dtype), rand_bit)
-    diag = tf.linalg.diag(diag)
+    grid_shape = torch.as_tensor(grid_shape, dtype=dtype, device=device)
+    rand_bit = torch.randn((ndims,), generator=generator, device=device) > 0
+    diag = torch.ones(ndims, dtype=dtype, device=device)
+    diag[rand_bit] = -1.0
+    diag_mat = torch.diag(diag)
 
-    # Account for center shift if needed.
-    shift = tf.multiply(grid_shape - 1, rand_bit)
-    shift = tf.reshape(shift, shape=(-1, 1))
+    shift = ((grid_shape - 1.0) * rand_bit.to(dtype)).unsqueeze(-1)
     if shift_center:
-        shift = tf.zeros(shape=(ndims, 1), dtype=dtype)
+        shift = torch.zeros((ndims, 1), dtype=dtype, device=device)
 
-    # Compose output.
-    out = tf.concat((diag, shift), axis=1)
+    out = torch.cat((diag_mat, shift), dim=1)
     if last_row:
-        row = dtype.as_numpy_dtype((*[0] * ndims, 1))
-        row = np.reshape(row, newshape=(1, -1))
-        out = tf.concat((out, row), axis=0)
+        row = torch.zeros((1, ndims + 1), dtype=dtype, device=device)
+        row[0, -1] = 1.0
+        out = torch.cat((out, row), dim=0)
 
     return out
 
 
-def draw_swap_matrix(ndims, last_row=True, dtype=tf.float32, seed=None):
+def draw_swap_matrix(ndims, last_row=True, dtype=torch.float32, seed=None):
     """
     Draw a matrix transform that randomly swaps axes of N-dimensional space.
 
@@ -73,15 +94,20 @@ def draw_swap_matrix(ndims, last_row=True, dtype=tf.float32, seed=None):
         SPIE Medical Imaging: Image Processing, 12464, p 1246402, 2023
         https://doi.org/10.1117/12.2653251
     """
-    dtype = tf.dtypes.as_dtype(dtype)
+    dtype = _resolve_dtype(dtype)
+    device = 'cpu'
+    generator = _make_generator(seed, device=device)
 
-    mat = tf.eye(ndims, ndims + 1, dtype=dtype)
-    mat = tf.random.shuffle(mat, seed=seed)
+    mat = torch.eye(ndims, ndims + 1, dtype=dtype, device=device)
+    perm = torch.randperm(ndims, generator=generator, device=device)
+    mat = mat[perm]
 
-    row = dtype.as_numpy_dtype((*[0] * ndims, 1))
-    row = np.reshape(row, newshape=(1, -1))
+    if last_row:
+        row = torch.zeros((1, ndims + 1), dtype=dtype, device=device)
+        row[0, -1] = 1.0
+        mat = torch.cat((mat, row), dim=0)
 
-    return tf.concat((mat, row), axis=0) if last_row else mat
+    return mat
 
 
 def draw_affine_params(shift=None,
@@ -96,8 +122,9 @@ def draw_affine_params(shift=None,
                        ndims=3,
                        batch_shape=None,
                        concat=True,
-                       dtype=tf.float32,
-                       seeds={}):
+                       dtype=torch.float32,
+                       seeds={},
+                       device=None):
     """
     Draw translation, rotation, scaling and shearing parameters defining an affine transform in
     N-dimensional space, where N is 2 or 3. Choose parameters wisely: there is no check for
@@ -145,6 +172,8 @@ def draw_affine_params(shift=None,
     """
     assert ndims in (2, 3), 'only 2D and 3D supported'
     n = 1 if ndims == 2 else 3
+    dtype = _resolve_dtype(dtype)
+    device = torch.device(device) if device is not None else torch.device('cpu')
 
     # Look-up tables.
     splits = dict(shift=ndims, rot=n, scale=ndims, shear=n)
@@ -161,18 +190,31 @@ def draw_affine_params(shift=None,
             x = np.repeat(x, repeats=n)
         assert len(x) == n, f'unexpected number of parameters {len(x)} ({k})'
         ranges[k] = x
-        shapes[k] = (n,) if batch_shape is None else tf.concat((batch_shape, [n]), axis=0)
+        if batch_shape is None:
+            shapes[k] = (n,)
+        else:
+            if isinstance(batch_shape, torch.Tensor):
+                shape_vals = tuple(int(v) for v in batch_shape.to(device='cpu').tolist())
+            else:
+                shape_vals = tuple(int(v) for v in np.atleast_1d(batch_shape))
+            shapes[k] = shape_vals + (n,)
 
     # Choose distribution.
     def sample(lim, shape, normal, trunc, seed):
-        prop = dict(dtype=tf.dtypes.as_dtype(dtype), seed=seed, shape=shape)
+        lim = torch.as_tensor(lim, dtype=dtype, device=device)
+        generator = _make_generator(seed, device=device)
+        expand = (1,) * (len(shape) - 1) + (lim.shape[0],)
+        lim_view = lim.view(expand)
+
         if normal:
-            func = 'truncated_normal' if trunc else 'normal'
-            prop.update(stddev=lim)
+            out = torch.randn(shape, generator=generator, dtype=dtype, device=device) * lim_view
+            if trunc:
+                limit = 2 * lim_view
+                out = torch.clamp(out, -limit, limit)
         else:
-            func = 'uniform'
-            prop.update(minval=-lim, maxval=lim)
-        return getattr(tf.random, func)(**prop)
+            out = torch.rand(shape, generator=generator, dtype=dtype, device=device) * 2 - 1
+            out = out * lim_view
+        return out
 
     # Sample parameters.
     par = {}
@@ -180,13 +222,13 @@ def draw_affine_params(shift=None,
     for k, lim in ranges.items():
         par[k] = sample(lim, shapes[k], normal[k], trunc[k], seed=seeds.pop(k, None))
     if shift_scale:
-        par['scale'] += 1
+        par['scale'] = par['scale'] + 1
     assert not seeds, f'unknown seeds {seeds}'
 
     # Output.
     order = ('shift', 'rot', 'scale', 'shear')
     out = tuple(par[k] for k in order)
-    return tf.concat(out, axis=-1) if concat else out
+    return torch.cat(out, dim=-1) if concat else out
 
 
 def down_up_sample(x,
@@ -227,37 +269,38 @@ def down_up_sample(x,
         https://doi.org/10.1117/12.2653251
     """
     # Validate inputs.
-    if not tf.is_tensor(x):
-        x = tf.constant(x)
+    if not isinstance(x, torch.Tensor):
+        x = torch.as_tensor(x)
     ndim = x.ndim - 1
     size = x.shape[:-1]
     axes = ne.py.utils.normalize_axes(axes, size, none_means_all=True)
     dtype = x.dtype
+    device = x.device
     if rand is None:
-        rand = tf.random.Generator.from_non_deterministic_state()
+        rand = torch.Generator(device=device)
 
     # Draw thickness.
     assert 1 <= stride_min and stride_min <= stride_max, 'invalid strides'
-    fact = rand.uniform(shape=[ndim], minval=stride_min, maxval=stride_max)
+    fact = torch.empty(ndim, dtype=dtype, device=device)
+    fact.uniform_(float(stride_min), float(stride_max), generator=rand)
 
     # One-hot encode axes.
-    axes = tf.constant(axes)
-    axes = tf.reduce_any(tf.range(ndim) == axes[None], axis=0)
+    axes_mask = torch.zeros(ndim, dtype=torch.bool, device=device)
+    axes_mask[list(axes)] = True
 
     # Decide where to downsample.
     assert 0 <= prob <= 1, f'{prob} not a probability'
-    bit = tf.less(rand.uniform(shape=[ndim]), prob)
-    fact = fact * tf.cast(bit, fact.dtype) + tf.cast(~bit, fact.dtype)
-    fact = fact * tf.cast(axes, fact.dtype) + tf.cast(~axes, fact.dtype)
+    bit = torch.rand(ndim, generator=rand, device=device) < prob
+    fact = torch.where(bit & axes_mask, fact, torch.ones_like(fact))
 
     # Downsample. Always use nearest.
-    diag = tf.concat((fact, [1]), axis=-1)
-    trans = tf.linalg.diag(diag)
+    diag = torch.cat((fact, torch.ones(1, dtype=dtype, device=device)))
+    trans = torch.diag(diag)
     x = utils.transform(x, trans, interp_method='nearest')
 
     # Upsample.
-    diag = tf.concat((1 / fact, [1]), axis=-1)
-    trans = tf.linalg.diag(diag)
+    diag = torch.cat(((1.0 / fact), torch.ones(1, dtype=dtype, device=device)))
+    trans = torch.diag(diag)
     x = utils.transform(x, trans, interp_method=interp_method)
 
-    return x if x.dtype == dtype else tf.cast(x, dtype)
+    return x if x.dtype == dtype else x.to(dtype)

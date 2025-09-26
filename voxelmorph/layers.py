@@ -1,5 +1,5 @@
 """
-tensorflow/keras layers for voxelmorph
+Keras (torch backend) layers for voxelmorph
 
 If you use this code, please cite one of the voxelmorph papers:
 https://github.com/voxelmorph/voxelmorph/blob/master/citations.bib
@@ -17,15 +17,10 @@ implied. See the License for the specific language governing permissions and lim
 License.
 """
 
-import os
 import warnings
-import numpy as np
+import torch
+from keras.layers import Layer
 import neurite as ne
-
-# tensorflow
-import tensorflow as tf
-import tensorflow.keras.backend as K
-from tensorflow.keras.layers import Layer
 
 # local utils
 from . import utils
@@ -126,22 +121,22 @@ class SpatialTransformer(Layer):
         self.built = True
 
     def call(self, inputs):
-        """
-        Parameters
-            inputs: List of [img, trf], where img is the ND moving image and trf
-            is either a dense warp of shape [B, D1, ..., DN, N] or an affine matrix
-            of shape [B, N, N+1] or [B, N+1, N+1].
-        """
+        """Apply dense or affine transforms to a batch of images."""
 
-        # necessary for multi-gpu models
-        vol = K.reshape(inputs[0], (-1, *self.imshape))
-        trf = K.reshape(inputs[1], (-1, *self.trfshape))
+        if not isinstance(inputs, (list, tuple)) or len(inputs) != 2:
+            raise ValueError('SpatialTransformer expects [image, transform] inputs')
 
-        # map transform across batch
-        if self.single_transform:
-            return tf.map_fn(lambda x: self._single_transform([x, trf[0, :]]), vol)
-        else:
-            return tf.map_fn(self._single_transform, [vol, trf], fn_output_signature=vol.dtype)
+        vols, transforms = inputs
+        batch = vols.shape[0]
+
+        outputs = []
+        for b in range(batch):
+            vol = vols[b]
+            trf = transforms[0] if self.single_transform else transforms[b]
+            warped = self._single_transform([vol, trf])
+            outputs.append(warped)
+
+        return torch.stack(outputs, dim=0)
 
     def _single_transform(self, inputs):
         return utils.transform(inputs[0],
@@ -196,10 +191,12 @@ class VecInt(Layer):
         self.int_steps = int_steps
         self.inshape = None
         self.out_time_pt = out_time_pt
-        self.odeint_fn = odeint_fn  # if none then will use a tensorflow function
+        self.odeint_fn = odeint_fn
         self.ode_args = ode_args
         if ode_args is None:
             self.ode_args = {'rtol': 1e-6, 'atol': 1e-12}
+        if self.method == 'ode':
+            raise NotImplementedError('ODE integration is not yet implemented for the torch backend.')
         super(self.__class__, self).__init__(**kwargs)
 
     def get_config(self):
@@ -231,35 +228,26 @@ class VecInt(Layer):
             inputs = [inputs]
         loc_shift = inputs[0]
 
-        # necessary for multi-gpu models
-        loc_shift = K.reshape(loc_shift, [-1, *self.inshape[1:]])
-        if hasattr(inputs[0], '_keras_shape'):
-            loc_shift._keras_shape = inputs[0]._keras_shape
+        if len(inputs) > 1 and self.out_time_pt is not None:
+            raise ValueError('Provide either layer-level out_time_pt or per-sample values, not both.')
 
-        if len(inputs) > 1:
-            assert self.out_time_pt is None, \
-                'out_time_pt should be None if providing batch_based out_time_pt'
+        batch = loc_shift.shape[0]
+        outputs = []
+        for b in range(batch):
+            vel = loc_shift[b]
+            out_time_pt = self.out_time_pt
+            if len(inputs) == 2:
+                out_time_pt = inputs[1][b]
+            outputs.append(utils.integrate_vec(
+                vel,
+                method=self.method,
+                nb_steps=self.int_steps,
+                ode_args=self.ode_args,
+                out_time_pt=out_time_pt,
+                odeint_fn=self.odeint_fn,
+            ))
 
-        # map transform across batch
-        out = tf.map_fn(self._single_int,
-                        [loc_shift] + inputs[1:],
-                        fn_output_signature=loc_shift.dtype)
-        if hasattr(inputs[0], '_keras_shape'):
-            out._keras_shape = inputs[0]._keras_shape
-        return out
-
-    def _single_int(self, inputs):
-
-        vel = inputs[0]
-        out_time_pt = self.out_time_pt
-        if len(inputs) == 2:
-            out_time_pt = inputs[1]
-        return utils.integrate_vec(vel, method=self.method,
-                                   nb_steps=self.int_steps,
-                                   ode_args=self.ode_args,
-                                   out_time_pt=out_time_pt,
-                                   odeint_fn=self.odeint_fn)
-
+        return torch.stack(outputs, dim=0)
 
 # full wording.
 VecIntegration = VecInt
@@ -364,14 +352,17 @@ class ComposeTransform(Layer):
         Parameters:
             transforms: List of affine or dense transforms to compose.
         """
+        if not isinstance(transforms, (list, tuple)):
+            raise ValueError('ComposeTransform expects an iterable of transforms.')
         if len(transforms) == 1:
             return transforms[0]
 
-        compose = lambda trf: utils.compose(trf,
-                                            interp_method=self.interp_method,
-                                            shift_center=self.shift_center,
-                                            shape=self.shape)
-        return tf.map_fn(compose, transforms, fn_output_signature=transforms[0].dtype)
+        return utils.compose(
+            transforms,
+            interp_method=self.interp_method,
+            shift_center=self.shift_center,
+            shape=self.shape,
+        )
 
 
 class AddIdentity(Layer):
@@ -411,7 +402,7 @@ class AddIdentity(Layer):
         Parameters
             transform: Affine transform of shape [B, N, N+1] or [B, N+1, N+1] or [B, N*(N+1)].
         """
-        transform = tf.reshape(transform, (-1, self.nrows, self.ndims + 1))
+        transform = torch.reshape(transform, (-1, self.nrows, self.ndims + 1))
         return utils.affine_add_identity(transform)
 
 
@@ -557,13 +548,13 @@ class DrawAffineParams(Layer):
                  normal_shift=False,
                  normal_rot=False,
                  normal_scale=False,
-                 normal_shear=False,
-                 shift_scale=False,
-                 ndims=3,
-                 concat=True,
-                 out_type=tf.float32,
-                 seeds={},
-                 **kwargs):
+                normal_shear=False,
+                shift_scale=False,
+                ndims=3,
+                concat=True,
+                out_type=torch.float32,
+                seeds={},
+                **kwargs):
         """
         Parameters:
             shift: Translation sampling range x around identity. Values will be sampled uniformly
@@ -599,7 +590,15 @@ class DrawAffineParams(Layer):
         self.shift_scale = shift_scale
         self.ndims = ndims
         self.concat = concat
-        self.out_type = tf.dtypes.as_dtype(out_type)
+        if isinstance(out_type, torch.dtype):
+            self.out_dtype = out_type
+        elif isinstance(out_type, str):
+            self.out_dtype = getattr(torch, out_type, torch.float32)
+        else:
+            try:
+                self.out_dtype = torch.as_tensor([], dtype=out_type).dtype
+            except TypeError:
+                self.out_dtype = torch.float32
         self.seeds = seeds
         super().__init__(**kwargs)
 
@@ -617,7 +616,7 @@ class DrawAffineParams(Layer):
             'shift_scale': self.shift_scale,
             'ndims': self.ndims,
             'concat': self.concat,
-            'out_type': self.out_type,
+            'out_type': str(self.out_dtype).split('.')[-1],
             'seeds': self.seeds,
         })
         return config
@@ -637,10 +636,11 @@ class DrawAffineParams(Layer):
                                         normal_shear=self.normal_shear,
                                         shift_scale=self.shift_scale,
                                         ndims=self.ndims,
-                                        batch_shape=tf.shape(x)[:1],
+                                        batch_shape=(x.shape[0],),
                                         concat=self.concat,
-                                        dtype=self.out_type,
-                                        seeds=self.seeds)
+                                        dtype=self.out_dtype,
+                                        seeds=self.seeds,
+                                        device=x.device)
 
 
 class DownUpSample(Layer):
@@ -707,9 +707,9 @@ class DownUpSample(Layer):
         allowed = range(1, ndims + 1)
         self.axes = ne.py.utils.normalize_axes(self.axes, in_shape, allowed, none_means_all=True)
 
-        self.rand = tf.random.Generator.from_non_deterministic_state()
+        self.generator = torch.Generator()
         if self.seed is not None:
-            self.rand.reset_from_seed(self.seed)
+            self.generator.manual_seed(int(self.seed))
 
         super().build(in_shape)
 
@@ -721,12 +721,19 @@ class DownUpSample(Layer):
         if self.prob == 0 or self.stride_max == 1:
             return x
 
-        func = lambda f: utils.down_up_sample(f,
-                                              stride_min=self.stride_min,
-                                              stride_max=self.stride_max,
-                                              axes=tuple(ax - 1 for ax in self.axes),
-                                              prob=self.prob,
-                                              interp_method=self.interp_method,
-                                              rand=self.rand)
+        axes = tuple(ax - 1 for ax in self.axes)
+        outputs = []
+        for sample in x:
+            outputs.append(
+                utils.down_up_sample(
+                    sample,
+                    stride_min=self.stride_min,
+                    stride_max=self.stride_max,
+                    axes=axes,
+                    prob=self.prob,
+                    interp_method=self.interp_method,
+                    rand=self.generator,
+                )
+            )
 
-        return tf.map_fn(func, x)
+        return torch.stack(outputs, dim=0)

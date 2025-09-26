@@ -1,179 +1,162 @@
 #!/usr/bin/env python
 
-"""
-Example script to train (unconditional) template creation.
+"""Train an unconditional atlas using the torch-backed Voxelmorph stack."""
 
-If you use this code, please cite the following:
+from __future__ import annotations
 
-    Learning Conditional Deformable Templates with Convolutional Networks
-    Adrian V. Dalca, Marianne Rakic, John Guttag, Mert R. Sabuncu
-    NeurIPS 2019. https://arxiv.org/abs/1908.02738
-
-Copyright 2020 Adrian V. Dalca
-
-Licensed under the Apache License, Version 2.0 (the "License"); you may not use this file except in 
-compliance with the License. You may obtain a copy of the License at
-
-http://www.apache.org/licenses/LICENSE-2.0
-
-Unless required by applicable law or agreed to in writing, software distributed under the License is
-distributed on an "AS IS" BASIS, WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or 
-implied. See the License for the specific language governing permissions and limitations under 
-the License.
-"""
-
-import os
-import random
 import argparse
+import os
 import numpy as np
-import tensorflow as tf
 import voxelmorph as vxm
 
+from keras import callbacks, optimizers
 
-# disable eager execution
-tf.compat.v1.disable_eager_execution()
+from . import _torch_utils as cli
 
 
-# parse the commandline
-parser = argparse.ArgumentParser()
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser()
 
-# data organization parameters
-parser.add_argument('--img-list', required=True, help='line-seperated list of training files')
-parser.add_argument('--img-prefix', help='optional input image file prefix')
-parser.add_argument('--img-suffix', help='optional input image file suffix')
-parser.add_argument('--init-template', help='initial template image')
-parser.add_argument('--model-dir', default='models',
-                    help='model output directory (default: models)')
-parser.add_argument('--multichannel', action='store_true',
-                    help='specify that data has multiple channels')
+    parser.add_argument('--img-list', required=True, help='line-separated list of training files')
+    parser.add_argument('--img-prefix', help='optional input image file prefix')
+    parser.add_argument('--img-suffix', help='optional input image file suffix')
+    parser.add_argument('--init-template', help='initial template image')
+    parser.add_argument('--model-dir', default='models', help='model output directory (default: models)')
+    parser.add_argument('--multichannel', action='store_true', help='specify that data has multiple channels')
 
-# training parameters
-parser.add_argument('--gpu', default='0', help='GPU ID numbers (default: 0)')
-parser.add_argument('--batch-size', type=int, default=1, help='batch size (default: 1)')
-parser.add_argument('--epochs', type=int, default=1500,
-                    help='number of training epochs (default: 1500)')
-parser.add_argument('--steps-per-epoch', type=int, default=100,
-                    help='frequency of model saves (default: 100)')
-parser.add_argument('--load-weights', help='optional weights file to initialize with')
-parser.add_argument('--initial-epoch', type=int, default=0,
-                    help='initial epoch number (default: 0)')
-parser.add_argument('--lr', type=float, default=1e-4, help='learning rate (default: 1e-4)')
+    parser.add_argument('--gpu', help='GPU number(s) - if not supplied, CPU is used')
+    parser.add_argument('--batch-size', type=int, default=1, help='batch size (default: 1)')
+    parser.add_argument('--epochs', type=int, default=1500, help='number of training epochs (default: 1500)')
+    parser.add_argument('--steps-per-epoch', type=int, default=100, help='steps per epoch (default: 100)')
+    parser.add_argument('--load-weights', help='optional weights file to initialise with')
+    parser.add_argument('--initial-epoch', type=int, default=0, help='initial epoch number (default: 0)')
+    parser.add_argument('--lr', type=float, default=1e-4, help='learning rate (default: 1e-4)')
 
-# network architecture parameters
-parser.add_argument('--enc', type=int, nargs='+',
-                    help='list of unet encoder filters (default: 16 32 32 32)')
-parser.add_argument('--dec', type=int, nargs='+',
-                    help='list of unet decorder filters (default: 32 32 32 32 32 16 16)')
+    parser.add_argument('--enc', type=int, nargs='+', help='list of unet encoder filters (default: 16 32 32 32)')
+    parser.add_argument('--dec', type=int, nargs='+', help='list of unet decoder filters (default: 32 32 32 32 32 16 16)')
 
-# loss hyperparameters
-parser.add_argument('--image-loss', default='ncc',
-                    help='image reconstruction loss - can be mse or ncc (default: ncc)')
-parser.add_argument('--image-loss-weight', type=float, default=1.0,
-                    help='relative weight of transformed atlas loss (default: 1.0)')
-parser.add_argument('--mean-loss-weight', type=float, default=1.0,
-                    help='weight of mean stream loss (default: 1.0)')
-parser.add_argument('--grad-loss-weight', type=float, default=1.0,
-                    help='weight of gradient loss (lamba) (default when using ncc: 1.0)')
+    parser.add_argument('--image-loss', default='ncc', choices=['ncc', 'mse'], help='image reconstruction loss (default: ncc)')
+    parser.add_argument('--image-loss-weight', type=float, default=1.0, help='weight of reconstructed image loss (default: 1.0)')
+    parser.add_argument('--mean-loss-weight', type=float, default=1.0, help='weight encouraging the atlas towards the data mean (default: 1.0)')
+    parser.add_argument('--grad-loss-weight', type=float, default=1.0, help='weight of deformation smoothness loss (default: 1.0)')
 
-args = parser.parse_args()
+    return parser
 
-# load and prepare training data
-train_files = vxm.py.utils.read_file_list(args.img_list, prefix=args.img_prefix,
-                                          suffix=args.img_suffix)
-assert len(train_files) > 0, 'Could not find any training data.'
 
-# prepare model folder
-model_dir = args.model_dir
-os.makedirs(model_dir, exist_ok=True)
+def load_training_data(args):
+    train_files = vxm.py.utils.read_file_list(args.img_list, prefix=args.img_prefix, suffix=args.img_suffix)
+    if not train_files:
+        raise ValueError('Could not find any training data.')
+    return train_files
 
-# no need to append an extra feature axis if data is multichannel
-add_feat_axis = not args.multichannel
 
-# prepare the initial weights for the template
-if args.init_template:
-    # load template from file
-    template = vxm.py.utils.load_volfile(args.init_template,
-                                         add_batch_axis=True, add_feat_axis=add_feat_axis)
-else:
-    # generate rough atlas by averaging inputs
-    navgs = min((100, len(train_files)))
-    print('Creating starting template by averaging first %d scans.' % navgs)
-    template = 0
-    for scan in train_files[:navgs]:
-        template += vxm.py.utils.load_volfile(scan, add_batch_axis=True,
-                                              add_feat_axis=add_feat_axis)
-    template /= navgs
+def compute_initial_template(args, train_files):
+    add_feat_axis = not args.multichannel
+    if args.init_template:
+        template = vxm.py.utils.load_volfile(args.init_template, add_batch_axis=True, add_feat_axis=add_feat_axis)
+    else:
+        navgs = min(100, len(train_files))
+        print(f'[voxelmorph] Averaging first {navgs} scans to initialise the template.')
+        template = 0
+        for scan in train_files[:navgs]:
+            template += vxm.py.utils.load_volfile(scan, add_batch_axis=True, add_feat_axis=add_feat_axis)
+        template /= navgs
+    return template
 
-# save average input atlas for the record
-vxm.py.utils.save_volfile(template.squeeze(), os.path.join(model_dir, 'init_template.nii.gz'))
 
-# get template shape (might differ from image input shape)
-template_shape = template.shape[1:-1]
-nfeats = template.shape[-1]
+def make_generator(args, train_files, add_feat_axis):
+    base = vxm.generators.template_creation(
+        train_files,
+        bidir=False,
+        batch_size=args.batch_size,
+        add_feat_axis=add_feat_axis,
+    )
 
-# tensorflow device handling
-device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
+    while True:
+        inputs, outputs = next(base)
+        scan = outputs[0]
+        zeros = outputs[-1]
+        yield inputs, [scan, scan, zeros]
 
-# unet architecture
-enc_nf = args.enc if args.enc else [16, 32, 32, 32]
-dec_nf = args.dec if args.dec else [32, 32, 32, 32, 32, 16, 16]
 
-# configure generator
-generator = vxm.generators.template_creation(
-    train_files, bidir=True, batch_size=args.batch_size, add_feat_axis=add_feat_axis)
+def set_initial_atlas(model, atlas):
+    layer = model.get_layer(f'{model.name}_atlas_param')
+    layer.set_weights([atlas.squeeze(axis=0)])
 
-# prepare model checkpoint save path
-save_filename = os.path.join(model_dir, '{epoch:04d}.h5')
 
-# build model
-model = vxm.networks.TemplateCreation(
-    template_shape,
-    nb_unet_features=[enc_nf, dec_nf],
-    atlas_feats=nfeats,
-    src_feats=nfeats
-)
+def extract_atlas(model):
+    layer = model.get_layer(f'{model.name}_atlas_param')
+    return layer.get_weights()[0]
 
-# set initial template weights
-model.set_atlas(template)
 
-# load initial weights (if provided)
-if args.load_weights:
-    model.load_weights(args.load_weights, by_name=True)
+def build_model(args, inshape, nfeats):
+    enc_nf = args.enc if args.enc else [16, 32, 32, 32]
+    dec_nf = args.dec if args.dec else [32, 32, 32, 32, 32, 16, 16]
 
-# prepare image loss
-if args.image_loss == 'ncc':
-    image_loss_func = vxm.losses.NCC().loss
-elif args.image_loss == 'mse':
-    image_loss_func = vxm.losses.MSE().loss
-else:
-    raise ValueError('Image loss should be "mse" or "ncc", but found "%s"' % args.image_loss)
+    return vxm.networks.TemplateCreation(
+        inshape=inshape,
+        nb_unet_features=[enc_nf, dec_nf],
+        src_feats=nfeats,
+        atlas_feats=nfeats,
+    )
 
-# make sure the warped target is compared to the generated atlas and not the input atlas
-neg_loss_func = lambda _, y_pred: image_loss_func(model.references.atlas_tensor, y_pred)
 
-losses = [image_loss_func, neg_loss_func,
-          vxm.losses.MSE().loss, vxm.losses.Grad('l2', loss_mult=2).loss]
-weights = [args.image_loss_weight, 1 - args.image_loss_weight,
-           args.mean_loss_weight, args.grad_loss_weight]
+def compile_model(model, args):
+    if args.image_loss == 'ncc':
+        image_loss = vxm.losses.NCC().loss
+    else:
+        image_loss = vxm.losses.MSE().loss
 
-# multi-gpu support
-if nb_devices > 1:
-    save_callback = vxm.networks.ModelCheckpointParallel(save_filename)
-    model = tf.keras.utils.multi_gpu_model(model, gpus=nb_devices)
-else:
-    save_callback = tf.keras.callbacks.ModelCheckpoint(save_filename, period=20)
+    mean_loss = vxm.losses.MSE().loss
+    grad_loss = vxm.losses.Grad('l2').loss
 
-model.compile(optimizer=tf.keras.optimizers.Adam(lr=args.lr), loss=losses, loss_weights=weights)
+    model.compile(
+        optimizer=optimizers.Adam(learning_rate=args.lr),
+        loss=[image_loss, mean_loss, grad_loss],
+        loss_weights=[args.image_loss_weight, args.mean_loss_weight, args.grad_loss_weight],
+    )
 
-# save starting weights
-model.save(save_filename.format(epoch=args.initial_epoch))
 
-model.fit_generator(generator,
-                    initial_epoch=args.initial_epoch,
-                    epochs=args.epochs,
-                    callbacks=[save_callback],
-                    steps_per_epoch=args.steps_per_epoch,
-                    verbose=1
-                    )
+def main():
+    args = build_parser().parse_args()
+    cli.setup_device(args.gpu)
 
-vxm.py.utils.save_volfile(model.get_atlas(), os.path.join(model_dir, 'template.nii.gz'))
+    train_files = load_training_data(args)
+    cli.ensure_directory(args.model_dir)
+
+    add_feat_axis = not args.multichannel
+    template = compute_initial_template(args, train_files)
+    vxm.py.utils.save_volfile(template.squeeze(), os.path.join(args.model_dir, 'init_template.nii.gz'))
+
+    generator = make_generator(args, train_files, add_feat_axis)
+    sample_inputs, _ = next(generator)
+    inshape = sample_inputs[0].shape[1:-1]
+    nfeats = sample_inputs[0].shape[-1]
+
+    model = build_model(args, inshape, nfeats)
+    set_initial_atlas(model, template.astype('float32'))
+    if args.load_weights:
+        model.load_weights(args.load_weights)
+    compile_model(model, args)
+
+    checkpoint_pattern = os.path.join(args.model_dir, 'weights_epoch_{epoch:04d}.weights.h5')
+    checkpoint_cb = callbacks.ModelCheckpoint(filepath=checkpoint_pattern, save_weights_only=True, save_freq='epoch')
+
+    if args.initial_epoch == 0:
+        cli.save_weights(model, checkpoint_pattern.format(epoch=0))
+
+    model.fit(
+        generator,
+        initial_epoch=args.initial_epoch,
+        epochs=args.epochs,
+        steps_per_epoch=args.steps_per_epoch,
+        callbacks=[checkpoint_cb],
+        verbose=1,
+    )
+
+    atlas = extract_atlas(model)
+    vxm.py.utils.save_volfile(atlas.squeeze(), os.path.join(args.model_dir, 'template.nii.gz'))
+
+
+if __name__ == '__main__':
+    main()

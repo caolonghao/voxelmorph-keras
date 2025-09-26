@@ -18,13 +18,17 @@ if curv is None or version.parse(curv) < version.parse(minv):
     raise ImportError(f'voxelmorph requires neurite version {minv} or greater, '
                       f'but found version {curv}')
 
-import tensorflow
-# ensure valid tensorflow version is available
-minv = '2.4'
-curv = getattr(tensorflow, '__version__', None)
+try:
+    import torch
+except ImportError as exc:  # pragma: no cover - environment guard
+    raise ImportError('voxelmorph now targets the PyTorch-backed Keras runtime; '
+                      'install torch to continue.') from exc
+
+minv = '2.0'
+curv = getattr(torch, '__version__', None)
 if curv is None or version.parse(curv) < version.parse(minv):
-    raise ImportError(f'voxelmorph requires tensorflow version {minv} or greater, '
-                        f'but found version {curv}')
+    raise ImportError(f'voxelmorph requires torch version {minv} or greater, '
+                      f'but found version {curv}')
 
 
 from . import py
