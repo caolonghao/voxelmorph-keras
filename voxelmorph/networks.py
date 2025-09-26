@@ -10,6 +10,10 @@ now, attempting to instantiate one of the unported classes raises a clear
 ``NotImplementedError``.
 """
 
+import os
+# Set Keras backend to PyTorch
+os.environ['KERAS_BACKEND'] = 'torch'
+
 from __future__ import annotations
 
 from typing import Iterable, Optional, Sequence, Tuple

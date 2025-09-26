@@ -2,6 +2,10 @@
 
 """Train a HyperMorph model with the torch-backed Voxelmorph stack."""
 
+import os
+# Set Keras backend to PyTorch
+os.environ['KERAS_BACKEND'] = 'torch'
+
 from __future__ import annotations
 
 import argparse

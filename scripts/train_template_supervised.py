@@ -10,6 +10,9 @@ import os
 from pathlib import Path
 from typing import Iterable, List, Sequence, Tuple
 
+# Set Keras backend to PyTorch
+os.environ['KERAS_BACKEND'] = 'torch'
+
 import neurite as ne
 import numpy as np
 import voxelmorph as vxm

@@ -2,6 +2,10 @@
 
 """Instance-specific optimisation on the torch-backed Keras stack."""
 
+import os
+# Set Keras backend to PyTorch
+os.environ['KERAS_BACKEND'] = 'torch'
+
 from __future__ import annotations
 
 import argparse

@@ -21,6 +21,10 @@ specific language governing permissions and limitations under the License.
 # internal python imports
 import math
 import os
+
+# Set Keras backend to PyTorch
+os.environ['KERAS_BACKEND'] = 'torch'
+
 import warnings
 from typing import Optional, Sequence, Tuple, Union
 

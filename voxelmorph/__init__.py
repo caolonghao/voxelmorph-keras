@@ -3,6 +3,9 @@
 
 import os
 
+# Set Keras backend to PyTorch
+os.environ['KERAS_BACKEND'] = 'torch'
+
 # set version
 __version__ = '0.2'
 

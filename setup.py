@@ -37,5 +37,7 @@ setuptools.setup(
         'scipy',
         'nibabel',
         'neurite>=0.2',
+        'torch>=2.0',
+        'keras>=3.0',
     ]
 )

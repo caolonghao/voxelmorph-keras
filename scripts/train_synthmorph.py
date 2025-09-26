@@ -6,6 +6,10 @@ from __future__ import annotations
 
 import argparse
 import os
+
+# Set Keras backend to PyTorch
+os.environ['KERAS_BACKEND'] = 'torch'
+
 import pickle
 import numpy as np
 import neurite as ne
