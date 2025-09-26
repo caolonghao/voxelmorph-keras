@@ -1,130 +1,141 @@
 # VoxelMorph: learning-based image registration
 
-**VoxelMorph** is a general purpose library for learning-based tools for alignment/registration, and more generally modelling with deformations.
+VoxelMorph is a general-purpose library for learning-based medical image registration, powered by the PyTorch-backed Keras runtime. The project bundles reusable network components, loss functions, data generators, and end-to-end training and inference scripts so you can assemble registration pipelines quickly.
 
-# Tutorial
+## Highlights
+- ready-to-run command-line scripts for training, registering, evaluating, and template building
+- modular Keras layers, networks, generators, and losses for custom research workflows
+- ships with sample atlases and segmentations plus links to community-pretrained models
+- battle-tested on 2D and 3D neuroimaging, but adaptable to any dense deformation task
 
-We have several VoxelMorph tutorials:
-  - the main [VoxelMorph tutorial](http://tutorial.voxelmorph.net/) explains VoxelMorph and learning-based registration
-  - a [deformable SynthMorph demo](https://colab.research.google.com/drive/1zaDnAJGUokS0knqWttuTgrRJMb6zxukI?usp=sharing) showing how to train a registration model without data
-  - an [affine SynthMorph demo](https://colab.research.google.com/drive/1QClknfaZIYklBjmBy-nUn83h85bpo8r0?usp=sharing) on learning anatomy-aware and acquisition-agnostic affine registration
-  - a [CT-to-MRI SynthMorph demo](https://colab.research.google.com/drive/1aWbFiyQw5mtJbTglpniAOMimGo_l8BYP?usp=drive_link) clipping the Hounsfield scale for multi-modal registration
-  - a [SynthMorph shapes demo](https://colab.research.google.com/drive/14s2h0j_Aoncp587vmpjsQBe6PQTxyVP5) that walks through the steps of running a trained 3D shapes model
-  - a [tutorial on training VoxelMorph](https://colab.research.google.com/drive/1ZefmWXBupRNsnIbBbGquhVDsk-7R7L1S?usp=sharing) on [OASIS data](https://github.com/adalca/medical-datasets/blob/master/neurite-oasis.md), which we processed and released for free for HyperMorph
-  - an [additional small tutorial](https://colab.research.google.com/drive/1V0CutSIfmtgDJg1XIkEnGteJuw0u7qT-#scrollTo=h1KXYz-Nauwn) on warping annotations together with images
-  - another tutorial on [template (atlas) construction](https://colab.research.google.com/drive/1SkQbrWTQHpQFrG4J2WoBgGZC9yAzUas2?usp=sharing) with VoxelMorph
-  - visualize [warp](https://colab.research.google.com/drive/1F8f1imh5WfyBv-crllfeJBFY16-KHl9c?usp=sharing) as warped grid
-  - [inverting warps](https://colab.research.google.com/drive/1juAJRYhPPDNbO9yRtlc0VGhbIFSuhpJ2?usp=sharing) that are not diffeomorphisms
+## Installation
 
-
-# Instructions
-
-To use the VoxelMorph library, either clone this repository and install the requirements listed in `setup.py` or install directly with pip.
-
+### PyPI (recommended)
 ```
 pip install voxelmorph
 ```
 
-## Pre-trained models
+### From source
+Clone the repository and install in editable mode:
+```
+pip install -e .
+```
+This reads dependencies from `setup.py`; ensure `torch>=2.0` and `neurite>=0.2` are available.
 
-See list of pre-trained models available [here](data/readme.md#models).
+## Tutorials and guides
+- [Quickstart: register two volumes](tutorial/quickstart_registration.md)
+- [Quickstart: train a model from scratch](tutorial/quickstart_training.md)
+- [Tutorial: build a 3D atlas](tutorial/atlas_generation_3d.md)
+- [Tutorial index](tutorial/README.md) for an overview and additional learning resources
+- Cloud and notebook experiences: the classic [VoxelMorph tutorial](http://tutorial.voxelmorph.net/) plus the collection of Colab notebooks linked in the tutorial index (SynthMorph, CT-to-MRI, annotation warping, atlas building, and more)
 
-## Training
+## Quick demo (Python API)
+```python
+import voxelmorph as vxm
 
-If you would like to train your own model, you will likely need to customize some of the data-loading code in `voxelmorph/generators.py` for your own datasets and data formats. However, it is possible to run many of the example scripts out-of-the-box, assuming that you provide a list of filenames in the training dataset. Training data can be in the NIfTI, MGZ, or npz (numpy) format, and it's assumed that each npz file in your data list has a `vol` parameter, which points to the image data to be registered, and an optional `seg` variable, which points to a corresponding discrete segmentation (for semi-supervised learning). It's also assumed that the shape of all training image data is consistent, but this, of course, can be handled in a customized generator if desired.
+moving = vxm.py.utils.load_volfile('moving.nii.gz', add_batch_axis=True, add_feat_axis=True)
+fixed = vxm.py.utils.load_volfile('fixed.nii.gz', add_batch_axis=True, add_feat_axis=True)
 
-For a given image list file `/images/list.txt` and output directory `/models/output`, the following script will train an image-to-image registration network (described in MICCAI 2018 by default) with an unsupervised loss. Model weights will be saved to a path specified by the `--model-dir` flag.
+model = vxm.networks.VxmDense.load('model.h5', inshape=moving.shape[1:-1])
+warp = model.register(moving, fixed)
+
+transform = vxm.networks.Transform(moving.shape[1:-1])
+registered = transform.predict([moving, warp])
+vxm.py.utils.save_volfile(registered.squeeze(), 'warped.nii.gz')
+```
+This mirrors the behaviour of the command-line scripts while giving full access to the model objects.
+
+## Working with the command-line scripts
+All scripts live in `scripts/` and accept `--help` for the full option set.
+
+### Training
+To train a dense deformation model on a list of volumes:
+```
+python scripts/train.py \
+    --img-list /path/to/train_volumes.txt \
+    --model-dir /path/to/output \
+    --gpu 0
+```
+
+- `train_volumes.txt` is a newline-separated list of `.npz`, `.nii.gz`, or `.mgz` files. Use `--img-prefix`/`--img-suffix` if paths need a common prefix or suffix.
+- Add `--atlas atlas.npz` to switch to scan-to-atlas training, or `--bidir` to enable bidirectional loss.
+- Change loss behaviour with `--image-loss {mse,ncc}` and deformation regularisation with `--lambda`.
+
+### Registration
+Given a trained model file (any `voxelmorph.networks.VxmDense` saved via `save()`), register a moving volume to a fixed target:
+```
+python scripts/register.py \
+    --moving moving.npz \
+    --fixed atlas.npz \
+    --moved moved.nii.gz \
+    --model models/brain.h5 \
+    --warp moved_warp.npz
+```
+The script supports `.npz`, `.nii.gz`, and `.mgz` inputs. Use `--multichannel` when images already contain an explicit channel dimension.
+
+### Evaluation (Dice overlap)
+Measure Dice scores between warped segmentations and fixed atlases:
+```
+python scripts/test.py \
+    --model models/brain.h5 \
+    --pairs /path/to/pairs.txt \
+    --img-suffix .npz --seg-suffix .npz \
+    --labels data/labels.npz
+```
+`pairs.txt` contains `moving fixed` pairs per line. Provide matching segmentation prefixes/suffixes to locate label volumes.
+
+### Additional workflows
+- `scripts/train_template.py` and `scripts/train_cond_template.py` implement atlas construction
+- `scripts/train_hypermorph.py` covers hyperparameter amortisation
+- `scripts/train_synthmorph*.py` replicate SynthMorph experiments
+- `scripts/warp.py` applies deformations produced by the models to arbitrary volumes
+
+## Pre-trained models and sample data
+Sample atlases, probability maps, labels, and quick-start data live under `data/`. The companion `data/readme.md` links to community-pretrained weights, including the dense brain T1 model and SynthMorph variants. Use these assets to test-drive the scripts without sourcing your own data.
+
+## SynthMorph
+SynthMorph is a strategy for learning registration without acquired imaging data, producing networks that are agnostic to MRI contrast variations ([eprint arXiv:2004.10282](https://arxiv.org/abs/2004.10282)). For a video overview and interactive demo that synthesises training volumes from label maps, visit [synthmorph.voxelmorph.net](https://synthmorph.voxelmorph.net).
+
+We provide pretrained weights for a ["shapes" variant](https://surfer.nmr.mgh.harvard.edu/ftp/data/voxelmorph/synthmorph/shapes-dice-vel-3-res-8-16-32-256f.h5) trained purely on synthetic geometry and a ["brains" variant](https://surfer.nmr.mgh.harvard.edu/ftp/data/voxelmorph/synthmorph/brains-dice-vel-0.5-res-16-256f.h5) trained on generated brain labels. The brain model optimises volume-overlap for a curated [set of FreeSurfer structures](https://surfer.nmr.mgh.harvard.edu/ftp/data/voxelmorph/synthmorph/fs-labels.npy). Use `python scripts/register.py` with the downloaded weights to run inference.
+
+For best performance:
+- min-max normalise inputs so intensities fall in `[0, 1]`
+- resample scans into the affine frame of the [reference image](https://surfer.nmr.mgh.harvard.edu/ftp/data/voxelmorph/synthmorph/ref.nii.gz)
+
+A common preprocessing route uses FreeSurfer: skull-strip with [SAMSEG](https://surfer.nmr.mgh.harvard.edu/fswiki/Samseg), then align with [`mri_robust_register`](https://surfer.nmr.mgh.harvard.edu/fswiki/mri_robust_register):
 
 ```
-./scripts/tf/train.py --img-list /images/list.txt --model-dir /models/output --gpu 0
+mri_robust_register --mov in.nii.gz --dst out.nii.gz --lta transform.lta --satit --iscale
+mri_robust_register --mov in.nii.gz --dst out.nii.gz --lta transform.lta --satit --iscale --ixform transform.lta --affine
 ```
 
-The `--img-prefix` and `--img-suffix` flags can be used to provide a consistent prefix or suffix to each path specified in the image list. Image-to-atlas registration can be enabled by providing an atlas file, e.g. `--atlas atlas.npz`. If you'd like to train using the original dense CVPR network (no diffeomorphism), use the `--int-steps 0` flag to specify no flow integration steps. Use the `--help` flag to inspect all of the command line options that can be used to fine-tune network architecture and training.
-
-
-## Registration
-
-If you simply want to register two images, you can use the `register.py` script with the desired model file. For example, if we have a model `model.h5` trained to register a subject (moving) to an atlas (fixed), we could run:
-
-```
-./scripts/tf/register.py --moving moving.nii.gz --fixed atlas.nii.gz --moved warped.nii.gz --model model.h5 --gpu 0
-```
-
-This will save the moved image to `warped.nii.gz`. To also save the predicted deformation field, use the `--save-warp` flag. Both npz or nifty files can be used as input/output in this script.
-
-
-## Testing (measuring Dice scores)
-
-To test the quality of a model by computing dice overlap between an atlas segmentation and warped test scan segmentations, run:
-
-```
-./scripts/tf/test.py --model model.h5 --atlas atlas.npz --scans scan01.npz scan02.npz scan03.npz --labels labels.npz
-```
-
-Just like for the training data, the atlas and test npz files include `vol` and `seg` parameters and the `labels.npz` file contains a list of corresponding anatomical labels to include in the computed dice score.
+Replace `--satit --iscale` with `--cost NMI` when you register across different MRI contrasts.
 
 
 ## Parameter choices
 
-
 ### CVPR version
 
-For the CC loss function, we found a reg parameter of 1 to work best. For the MSE loss function, we found 0.01 to work best.
+For the CC loss function, we found a reg parameter of 1 to work best, with more regularisation leading to smoother deformation.
+
+For the segmentation-based loss function, we found that a data weight of 5 to work best, with more regularisation giving higher Dice scores but smoother deformations. However, Dice is already fairly high even for the segmentation-based loss alone.
+
+Note that some of these choices might depend on the dataset and network architecture.
+
+### MICCAI diffeomorphic version
+
+This uses the same architecture as the CVPR version, with the addition of a velocity field integration method (scaling and squaring), paired with a loss on the velocity field. Please see the paper for additional detail. A good range of regularisation parameter is between 0.01 and 0.1. 
+
+### Probabilistic version
+
+This version integrates the probabilistic loss function and uses a sampling decoder for inference. This works best if a variational-type data augmentation is enabled, which introduces random augmentation to each training iteration from a learnt space. Please see the papers for full details.
 
 
-### MICCAI version
+## Citations
 
-For our data, we found `image_sigma=0.01` and `prior_lambda=25` to work best.
+If you use VoxelMorph in your work, please cite the relevant publications.
 
-In the original MICCAI code, the parameters were applied after the scaling of the velocity field. With the newest code, this has been "fixed", with different default parameters reflecting the change. We recommend running the updated code. However, if you'd like to run the very original MICCAI2018 mode, please use `xy` indexing and `use_miccai_int` network option, with MICCAI2018 parameters.
-
-
-## Spatial transforms and integration
-
-- The spatial transform code, found at `voxelmorph.layers.SpatialTransformer`, accepts N-dimensional affine and dense transforms, including linear and nearest neighbor interpolation options. Note that original development of VoxelMorph used `xy` indexing, whereas we are now emphasizing `ij` indexing.
-
-- For the MICCAI2018 version, we integrate the velocity field using `voxelmorph.layers.VecInt`. By default we integrate using scaling and squaring, which we found efficient.
-
-
-# VoxelMorph papers
-
-If you use VoxelMorph or some part of the code, please cite (see [bibtex](citations.bib)):
-
-  * HyperMorph, avoiding the need to tune registration hyperparameters:   
-
-    **Learning the Effect of Registration Hyperparameters with HyperMorph**  
-    Andrew Hoopes, [Malte Hoffmann](https://malte.cz), Bruce Fischl, [John Guttag](https://people.csail.mit.edu/guttag/), [Adrian V. Dalca](http://adalca.mit.edu)  
-    MELBA: Machine Learning for Biomedical Imaging. 2022. [eprint arXiv:2203.16680](https://arxiv.org/abs/2203.16680)
-
-    **HyperMorph: Amortized Hyperparameter Learning for Image Registration.**  
-    Andrew Hoopes, [Malte Hoffmann](https://malte.cz), Bruce Fischl, [John Guttag](https://people.csail.mit.edu/guttag/), [Adrian V. Dalca](http://adalca.mit.edu)  
-    IPMI: Information Processing in Medical Imaging. 2021. [eprint arXiv:2101.01035](https://arxiv.org/abs/2101.01035)
-
-  * [SynthMorph](https://synthmorph.voxelmorph.net), avoiding the need to have data at training (!):  
-
-    **Anatomy-aware and acquisition-agnostic joint registration with SynthMorph.**  
-    [Malte Hoffmann](https://malte.cz), Andrew Hoopes, Douglas N. Greve, Bruce Fischl, [Adrian V. Dalca](http://adalca.mit.edu)  
-    Imaging Neuroscience. 2024. [eprint arXiv:2301.11329](https://arxiv.org/abs/2301.11329)
-
-    **Anatomy-specific acquisition-agnostic affine registration learned from fictitious images.**  
-    [Malte Hoffmann](https://malte.cz), Andrew Hoopes, Bruce Fischl, [Adrian V. Dalca](http://adalca.mit.edu)  
-    SPIE Medical Imaging: Image Processing. 2023.
-
-    **SynthMorph: learning contrast-invariant registration without acquired images.**  
-    [Malte Hoffmann](https://malte.cz), Benjamin Billot, [Juan Eugenio Iglesias](https://scholar.harvard.edu/iglesias), Bruce Fischl, [Adrian V. Dalca](http://adalca.mit.edu)  
-    IEEE TMI: Transactions on Medical Imaging. 2022. [eprint arXiv:2004.10282](https://arxiv.org/abs/2004.10282)
-
-  * For the atlas formation model:  
-  
-    **Learning Conditional Deformable Templates with Convolutional Networks**  
-  [Adrian V. Dalca](http://adalca.mit.edu), [Marianne Rakic](https://mariannerakic.github.io/), [John Guttag](https://people.csail.mit.edu/guttag/), [Mert R. Sabuncu](http://sabuncu.engineering.cornell.edu/)  
-  NeurIPS 2019. [eprint arXiv:1908.02738](https://arxiv.org/abs/1908.02738)
-
-  * For the diffeomorphic or probabilistic model:
-
-    **Unsupervised Learning of Probabilistic Diffeomorphic Registration for Images and Surfaces**  
-[Adrian V. Dalca](http://adalca.mit.edu), [Guha Balakrishnan](http://people.csail.mit.edu/balakg/), [John Guttag](https://people.csail.mit.edu/guttag/), [Mert R. Sabuncu](http://sabuncu.engineering.cornell.edu/)  
-MedIA: Medial Image Analysis. 2019. [eprint arXiv:1903.03545](https://arxiv.org/abs/1903.03545) 
+  * For the probabilistic diffeomorphic model (default torch-backed implementation):
 
     **Unsupervised Learning for Fast Probabilistic Diffeomorphic Registration**  
 [Adrian V. Dalca](http://adalca.mit.edu), [Guha Balakrishnan](http://people.csail.mit.edu/balakg/), [John Guttag](https://people.csail.mit.edu/guttag/), [Mert R. Sabuncu](http://sabuncu.engineering.cornell.edu/)  
@@ -142,7 +153,7 @@ IEEE TMI: Transactions on Medical Imaging. 2019.
 CVPR 2018. [eprint arXiv:1802.02604](https://arxiv.org/abs/1802.02604)
 
 
-# Notes
+## Notes
 - **keywords**: machine learning, convolutional neural networks, alignment, mapping, registration  
 - **data in papers**: 
 In our initial papers, we used publicly available data, but unfortunately we cannot redistribute it (due to the constraints of those datasets). We do a certain amount of pre-processing for the brain images we work with, to eliminate sources of variation and be able to compare algorithms on a level playing field. In particular, we perform FreeSurfer `recon-all` steps up to skull stripping and affine normalization to Talairach space, and crop the images via `((48, 48), (31, 33), (3, 29))`. 
@@ -150,9 +161,9 @@ In our initial papers, we used publicly available data, but unfortunately we can
 We encourage users to download and process their own data. See [a list of medical imaging datasets here](https://github.com/adalca/medical-datasets). Note that you likely do not need to perform all of the preprocessing steps, and indeed VoxelMorph has been used in other work with other data.
 
 
-# Creation of deformable templates
+## Creation of deformable templates
 
-To experiment with this method, please use `train_template.py` for unconditional templates and `train_cond_template.py` for conditional templates, which use the same conventions as VoxelMorph (please note that these files are less polished than the rest of the VoxelMorph library).
+To experiment with this method, please use `scripts/train_template.py` for unconditional templates and `scripts/train_cond_template.py` for conditional templates, which use the same conventions as VoxelMorph (please note that these files are less polished than the rest of the VoxelMorph library).
 
 We've also provided an unconditional atlas in `data/generated_uncond_atlas.npz.npy`. 
 
@@ -160,25 +171,8 @@ Models in h5 format weights are provided for [unconditional atlas here](http://p
 
 **Explore the atlases [interactively here](http://voxelmorph.mit.edu/atlas_creation/)** with tipiX!
 
+## Data
+While we cannot release most of the datasets used in the original VoxelMorph papers because redistribution is restricted, we thoroughly processed and [re-released OASIS1](https://github.com/adalca/medical-datasets/blob/master/neurite-oasis.md) while developing [HyperMorph](http://hypermorph.voxelmorph.net/). The accompanying [VoxelMorph-on-OASIS Colab](https://colab.research.google.com/drive/1ZefmWXBupRNsnIbBbGquhVDsk-7R7L1S?usp=sharing) demonstrates an end-to-end training pipeline on that release.
 
-# SynthMorph
-
-SynthMorph is a strategy for learning registration without acquired imaging data, producing powerful networks agnostic to contrast induced by MRI ([eprint arXiv:2004.10282](https://arxiv.org/abs/2004.10282)). For a video and a demo showcasing the steps of generating random label maps from noise distributions and using these to train a network, visit [synthmorph.voxelmorph.net](https://synthmorph.voxelmorph.net).
-
-We provide model files for a ["shapes" variant](https://surfer.nmr.mgh.harvard.edu/ftp/data/voxelmorph/synthmorph/shapes-dice-vel-3-res-8-16-32-256f.h5) of SynthMorph, that we train using images synthesized from random shapes only, and a ["brains" variant](https://surfer.nmr.mgh.harvard.edu/ftp/data/voxelmorph/synthmorph/brains-dice-vel-0.5-res-16-256f.h5), that we train using images synthesized from brain label maps. We train the brains variant by optimizing a loss term that measures volume overlap of a [selection of brain labels](https://surfer.nmr.mgh.harvard.edu/ftp/data/voxelmorph/synthmorph/fs-labels.npy). For registration with either model, please use the `register.py` script with the respective model weights.
-
-Accurate registration requires the input images to be min-max normalized, such that voxel intensities range from 0 to 1, and to be resampled in the affine space of a [reference image](https://surfer.nmr.mgh.harvard.edu/ftp/data/voxelmorph/synthmorph/ref.nii.gz). The affine registration can be performed with a variety of packages, and we choose FreeSurfer. First, we skull-strip the images with [SAMSEG](https://surfer.nmr.mgh.harvard.edu/fswiki/Samseg), keeping brain labels only. Second, we run [mri_robust_register](https://surfer.nmr.mgh.harvard.edu/fswiki/mri_robust_register):
-
-```
-mri_robust_register --mov in.nii.gz --dst out.nii.gz --lta transform.lta --satit --iscale
-mri_robust_register --mov in.nii.gz --dst out.nii.gz --lta transform.lta --satit --iscale --ixform transform.lta --affine
-```
-
-where we replace `--satit --iscale` with `--cost NMI` for registration across MRI contrasts.
-
-
-# Data
-While we cannot release most of the data used in the VoxelMorph papers as they prohibit redistribution, we thorough processed and [re-released OASIS1](https://github.com/adalca/medical-datasets/blob/master/neurite-oasis.md) while developing [HyperMorph](http://hypermorph.voxelmorph.net/). We now include a quick [VoxelMorph tutorial](https://colab.research.google.com/drive/1ZefmWXBupRNsnIbBbGquhVDsk-7R7L1S?usp=sharing) to train VoxelMorph on neurite-oasis data.
-
-# Contact
-For any code-related problems or questions please [open an issue](https://github.com/voxelmorph/voxelmorph/issues/new?labels=voxelmorph) or [start a discussion](https://github.com/voxelmorph/voxelmorph/discussions) of general registration/VoxelMorph topics.
+## Contact
+For code-related questions please [open an issue](https://github.com/voxelmorph/voxelmorph/issues/new?labels=voxelmorph) or [start a discussion](https://github.com/voxelmorph/voxelmorph/discussions) about general registration topics.
