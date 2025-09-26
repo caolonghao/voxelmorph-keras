@@ -5,7 +5,7 @@ This folder collects step-by-step guides for the most common VoxelMorph workflow
 ## Local guides
 - [Quickstart: register two volumes](quickstart_registration.md)
 - [Quickstart: train a model from scratch](quickstart_training.md)
-- [Tutorial: build a 3D atlas](atlas_generation_3d.md)
+- [Tutorial: build a 3D atlas](atlas_generation_3d.md) (includes optional segmentation supervision workflow)
 
 ## External notebooks and demos
 - [VoxelMorph tutorial](http://tutorial.voxelmorph.net/) - conceptual overview and TensorFlow-era walkthrough

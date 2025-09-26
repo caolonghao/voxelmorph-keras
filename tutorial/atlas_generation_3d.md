@@ -92,3 +92,87 @@ The registration network reuses the same deformation blocks provided by the `Tem
 - **Overly sharp deformations**: raise `--grad-loss-weight` or limit the decoder depth via `--enc/--dec`.
 
 Interface compatibility check: both `scripts/train_template.py` and `voxelmorph.networks.TemplateCreation` rely on the current `neurite.layers.LocalParamWithInput` and `voxelmorph.networks.VxmDense` modules, so the commands above match the latest library layout.
+
+## Optional: supervise atlas building with segmentations
+When manual segmentations are available you can encourage anatomical consistency by adding a Dice loss between each subject segmentation warped into atlas space and a learnable atlas segmentation. A convenient way to pair scans and labels is to use a CSV file:
+
+```
+image,seg
+/data/sub-001_T1w.nii.gz,/data/sub-001_seg.nii.gz
+/data/sub-002_T1w.nii.gz,/data/sub-002_seg.nii.gz
+...
+```
+
+Load the CSV inside a custom training script (for example `scripts/train_template_supervised.py`) that extends `train_template.py`:
+
+```python
+import csv
+
+def read_supervised_csv(path):
+    with open(path, newline='') as f:
+        reader = csv.DictReader(f)
+        pairs = [(row['image'], row['seg']) for row in reader]
+    if not pairs:
+        raise ValueError('CSV is empty or missing "image"/"seg" headers.')
+    return pairs
+```
+
+The model can reuse `TemplateCreation` for the intensity pathway and bolt on a segmentation branch:
+
+```python
+template = vxm.networks.TemplateCreation(
+    inshape=inshape,
+    nb_unet_features=[enc_nf, dec_nf],
+    src_feats=nfeats,
+    atlas_feats=nfeats,
+)
+
+image_input = template.inputs[0]
+warped_image, atlas_image, flow = template.outputs
+seg_input = KL.Input(shape=(*inshape, nb_labels), name='seg_input')
+
+atlas_seg_layer = ne.layers.LocalParamWithInput(
+    shape=(*inshape, nb_labels),
+    initializer='zeros',
+    name='template_creation_atlas_seg_param',
+)
+atlas_seg = atlas_seg_layer(image_input)
+
+warp_seg = vxm.networks.Transform(inshape, nb_feats=nb_labels, interp_method='nearest')
+warped_seg = warp_seg([seg_input, flow])
+
+model = keras.Model(
+    inputs=[image_input, seg_input],
+    outputs=[warped_image, atlas_image, flow, warped_seg, atlas_seg],
+)
+```
+
+Expose Dice weights as CLI flags so you can balance segmentation supervision:
+
+```
+python scripts/train_template_supervised.py \
+    --data-csv train_pairs.csv \
+    --labels labels.npy \
+    --dice-loss-weight 1.5 \
+    --atlas-dice-loss-weight 0.5 \
+    --model-dir outputs/atlas3d_supervised \
+    --gpu 0
+```
+
+Compile the extended model with an additional Dice loss term, driven by those flags:
+
+```python
+image_loss = vxm.losses.NCC().loss
+grad_loss = vxm.losses.Grad('l2').loss
+dice_loss = vxm.losses.Dice().loss
+
+model.compile(
+    optimizer=optimizers.Adam(learning_rate=args.lr),
+    loss=[image_loss, vxm.losses.MSE().loss, grad_loss, dice_loss, dice_loss],
+    loss_weights=[args.image_loss_weight, args.mean_loss_weight, args.grad_loss_weight, args.dice_loss_weight, args.atlas_dice_loss_weight],
+)
+```
+
+During training the generator should emit two inputs (`[image, one_hot_seg]`) and two segmentation targets (the subject segmentation warped into atlas space and the learnable atlas segmentation). You can follow the implementation of `vxm.generators.semisupervised` for converting label maps into one-hot volumes and down-sampling them if needed.
+
+Use `labels.npy` to list the integer label values that should contribute to the Dice loss (for example `[0, 1, 2, 3]`). The learned atlas segmentation can be exported alongside the intensity atlas and reused to propagate annotations via `scripts/warp.py` or the Python API.

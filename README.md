@@ -86,6 +86,7 @@ python scripts/test.py \
 
 ### Additional workflows
 - `scripts/train_template.py` and `scripts/train_cond_template.py` implement atlas construction
+- `scripts/train_template_supervised.py` adds segmentation-supervised atlas fitting with CSV inputs
 - `scripts/train_hypermorph.py` covers hyperparameter amortisation
 - `scripts/train_synthmorph*.py` replicate SynthMorph experiments
 - `scripts/warp.py` applies deformations produced by the models to arbitrary volumes
