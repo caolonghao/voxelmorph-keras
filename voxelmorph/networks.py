@@ -64,7 +64,6 @@ def _upsample_layer(ndims: int):
 
 
 def _infer_ndims(tensor) -> int:
-    print(f'_infer_ndims: tensor.shape = {tensor.shape}')
     rank = len(tensor.shape)
     if rank is None:
         raise ValueError('Tensor rank must be statically known to build the network.')
