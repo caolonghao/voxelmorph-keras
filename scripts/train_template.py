@@ -15,7 +15,7 @@ import voxelmorph as vxm
 
 from keras import callbacks, optimizers
 
-from . import _torch_utils as cli
+import _torch_utils as cli
 
 
 def build_parser() -> argparse.ArgumentParser:

@@ -9,12 +9,10 @@ wrapper.  Additional architectures will be reintroduced incrementally – for
 now, attempting to instantiate one of the unported classes raises a clear
 ``NotImplementedError``.
 """
-
+from __future__ import annotations
 import os
 # Set Keras backend to PyTorch
 os.environ['KERAS_BACKEND'] = 'torch'
-
-from __future__ import annotations
 
 from typing import Iterable, Optional, Sequence, Tuple
 
@@ -66,10 +64,13 @@ def _upsample_layer(ndims: int):
 
 
 def _infer_ndims(tensor) -> int:
+    print(f'_infer_ndims: tensor.shape = {tensor.shape}')
     rank = len(tensor.shape)
     if rank is None:
         raise ValueError('Tensor rank must be statically known to build the network.')
-    return rank - 1
+    if rank < 3:
+        raise ValueError(f'Unexpected tensor rank {rank}; expected at least 3 (batch, spatial..., channels).')
+    return rank - 2
 
 
 def _compute_unet_features(nb_features, nb_levels, feat_mult) -> Tuple[Tuple[int, ...], Tuple[int, ...]]:
