@@ -45,6 +45,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--mean-loss-weight', type=float, default=1.0, help='weight encouraging the atlas towards the data mean (default: 1.0)')
     parser.add_argument('--grad-loss-weight', type=float, default=1.0, help='weight of deformation smoothness loss (default: 1.0)')
 
+    # Registration field and integration controls
+    parser.add_argument('--reg-field', default='preintegrated', choices=['svf', 'preintegrated', 'postintegrated', 'warp'],
+                        help='registration field to output and regularize (default: preintegrated)')
+    parser.add_argument('--int-steps', type=int, default=7,
+                        help='number of scaling-and-squaring integration steps (default: 7)')
+
     return parser
 
 
@@ -103,6 +109,8 @@ def build_model(args, inshape, nfeats):
         nb_unet_features=[enc_nf, dec_nf],
         src_feats=nfeats,
         atlas_feats=nfeats,
+        reg_field=args.reg_field,
+        int_steps=args.int_steps,
     )
 
 

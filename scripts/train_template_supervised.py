@@ -25,10 +25,11 @@ from . import _torch_utils as cli
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser()
 
-    parser.add_argument('--data-csv', required=True, help='CSV with columns "image" and "seg" listing training pairs')
-    parser.add_argument('--labels', required=True, help='npy file containing integer label values used for Dice supervision')
-    parser.add_argument('--img-np-var', default='vol', help='npz variable name for images (default: vol)')
-    parser.add_argument('--seg-np-var', default='seg', help='npz variable name for segmentations (default: seg)')
+    parser.add_argument('--data-csv', required=True, help='CSV with columns "image" and "seg" listing training pairs (supports NIfTI .nii/.nii.gz and .npz)')
+    parser.add_argument('--labels', help='optional npy/npz file containing integer label values; default: infer from all seg files in CSV')
+    parser.add_argument('--labels-list', type=int, nargs='+', help='explicit integer label values (e.g., 1 2 3); overrides --labels')
+    parser.add_argument('--img-np-var', default='vol', help='npz variable name for images when image files are .npz (default: vol); ignored for NIfTI .nii/.nii.gz')
+    parser.add_argument('--seg-np-var', default='seg', help='npz variable name for segmentations when seg files are .npz (default: seg); ignored for NIfTI .nii/.nii.gz')
     parser.add_argument('--init-template', help='optional initial intensity template volume')
     parser.add_argument('--init-template-seg', help='optional initial atlas segmentation (probabilities)')
     parser.add_argument('--model-dir', default='models', help='output directory (default: models)')
@@ -44,6 +45,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     parser.add_argument('--enc', type=int, nargs='+', help='U-Net encoder filters (default: 16 32 32 32)')
     parser.add_argument('--dec', type=int, nargs='+', help='U-Net decoder filters (default: 32 32 32 32 32 16 16)')
+
+    # Registration field and integration controls
+    parser.add_argument('--reg-field', default='warp', choices=['svf', 'preintegrated', 'postintegrated', 'warp'],
+                        help='registration field to output and regularize (default: warp)')
+    parser.add_argument('--int-steps', type=int, default=7,
+                        help='number of scaling-and-squaring integration steps (default: 7)')
 
     parser.add_argument('--image-loss', default='ncc', choices=['ncc', 'mse'], help='image reconstruction loss (default: ncc)')
     parser.add_argument('--image-loss-weight', type=float, default=1.0, help='weight for image reconstruction loss (default: 1.0)')
@@ -85,6 +92,56 @@ def read_supervised_csv(csv_path: str) -> List[Tuple[str, str]]:
 
 def is_npz_file(path: str) -> bool:
     return Path(path).suffix == '.npz'
+
+
+def is_npy_file(path: str) -> bool:
+    return Path(path).suffix == '.npy'
+
+
+def load_labels_file(path: str) -> np.ndarray:
+    if is_npy_file(path):
+        arr = np.load(path)
+    elif is_npz_file(path):
+        npz = np.load(path)
+        keys = list(npz.keys())
+        if not keys:
+            raise ValueError('Labels npz file contains no arrays.')
+        if 'labels' in npz:
+            arr = npz['labels']
+        else:
+            arr = npz[keys[0]]
+    else:
+        raise ValueError('Unsupported labels file type. Use .npy/.npz or provide --labels-list.')
+    return np.asarray(arr)
+
+
+def load_seg_scalar(path: str, np_var: str | None) -> np.ndarray:
+    kwargs = dict(add_batch_axis=False, add_feat_axis=False)
+    if np_var and is_npz_file(path):
+        kwargs['np_var'] = np_var
+    vol = vxm.py.utils.load_volfile(path, **kwargs)
+    return np.rint(vol).astype('int32')
+
+
+def infer_labels_from_pairs(pairs: Sequence[Tuple[str, str]], seg_np_var: str | None) -> np.ndarray:
+    label_set = set()
+    for _, seg_path in pairs:
+        seg_data = load_seg_scalar(seg_path, seg_np_var)
+        uniques = np.unique(seg_data)
+        for u in uniques:
+            label_set.add(int(u))
+    if not label_set:
+        raise ValueError('Could not infer labels: no segmentation labels found in provided CSV.')
+    return np.array(sorted(label_set), dtype='int32')
+
+
+def resolve_labels(args, pairs: Sequence[Tuple[str, str]]) -> np.ndarray:
+    if args.labels_list:
+        return np.asarray(args.labels_list)
+    if args.labels:
+        return load_labels_file(args.labels)
+    # Default: infer from all seg files listed in CSV
+    return infer_labels_from_pairs(pairs, args.seg_np_var)
 
 
 def load_volume(path: str, add_feat_axis: bool, np_var: str | None) -> np.ndarray:
@@ -181,6 +238,8 @@ def build_model(
         nb_unet_features=[enc_nf, dec_nf],
         src_feats=nfeats,
         atlas_feats=nfeats,
+        reg_field=args.reg_field,
+        int_steps=args.int_steps,
     )
 
     image_input = template.inputs[0]
@@ -248,9 +307,9 @@ def main():
     cli.setup_device(args.gpu)
 
     pairs = read_supervised_csv(args.data_csv)
-    labels = np.load(args.labels)
+    labels = resolve_labels(args, pairs)
     if labels.ndim != 1:
-        raise ValueError('labels.npy must contain a 1D array of label values.')
+        raise ValueError('Labels must be provided as a 1D array of integer values.')
     labels = labels.astype('int32')
 
     cli.ensure_directory(args.model_dir)
