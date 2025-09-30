@@ -24,8 +24,9 @@ import warnings
 # third party
 import numpy as np
 import neurite as ne
-import tensorflow as tf
-import tensorflow.keras.backend as K
+from keras import backend as K
+
+from . import keras_backend as tf
 
 
 class NCC:

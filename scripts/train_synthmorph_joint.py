@@ -16,7 +16,8 @@
 import pathlib
 import argparse
 import numpy as np
-import tensorflow as tf
+import keras
+from voxelmorph import keras_backend as tf
 import neurite as ne
 import voxelmorph as vxm
 
@@ -95,7 +96,7 @@ arg = p.parse_args()
 
 # TensorFlow
 gpu, num_gpu = vxm.tf.utils.setup_device(arg.gpu)
-assert tf.__version__.startswith('2'), f'TensorFlow version {tf.__version__} is not 2'
+assert int(keras.__version__.split('.')[0]) >= 3, f'Keras version {keras.__version__} is not 3 or later'
 
 
 # output directories
@@ -140,10 +141,10 @@ ima_2, map_2 = gen_model_2.outputs
 
 # registration
 keys = list(f for f in vars(arg) if f.startswith('aff'))
-hyp = tf.keras.layers.Input(shape=(1,), name='hyp')
+hyp = keras.layers.Input(shape=(1,), name='hyp')
 inputs = (hyp, *gen_model_1.inputs, *gen_model_2.inputs)
 model = vxm.networks.HyperVxmJoint(
-    input_model=tf.keras.Model(inputs, outputs=(hyp, ima_1, ima_2)),
+    input_model=keras.Model(inputs, outputs=(hyp, ima_1, ima_2)),
     hyp_units=arg.units,
     enc_nf=arg.enc,
     dec_nf=arg.dec,
@@ -166,12 +167,12 @@ out = (hyp, mov_1, map_2, warp)
 
 
 # weight freezing
-model_aff, model_def = (f for f in model.layers if isinstance(f, tf.keras.Model))
+model_aff, model_def = (f for f in model.layers if isinstance(f, keras.Model))
 model_aff.trainable = not arg.freeze_aff
 model_def.trainable = not arg.freeze_def
 
 
-class AddLoss(tf.keras.layers.Layer):
+class AddLoss(keras.layers.Layer):
     def call(self, x):
         hyp, mov_1, map_2, warp = x
         const = tf.zeros((arg.batch_size, 1))
@@ -182,15 +183,15 @@ class AddLoss(tf.keras.layers.Layer):
 
 
 # loss
-model = tf.keras.Model(model.inputs, AddLoss()(out))
-optim = tf.keras.optimizers.Adam(learning_rate=arg.lr)
+model = keras.Model(model.inputs, AddLoss()(out))
+optim = keras.optimizers.Adam(learning_rate=arg.lr)
 model.compile(optim, jit_compile=False)
 model.summary()
 
 
 # callbacks
 steps_per_epoch = 100
-save = tf.keras.callbacks.ModelCheckpoint(
+save = keras.callbacks.ModelCheckpoint(
     filepath=arg.model_dir / '{epoch:05d}.weights.h5',
     save_freq=steps_per_epoch * arg.save_freq,
     save_weights_only=True,
@@ -198,7 +199,7 @@ save = tf.keras.callbacks.ModelCheckpoint(
 callbacks = [save]
 
 if arg.log_dir:
-    log = tf.keras.callbacks.TensorBoard(log_dir=arg.log_dir, write_graph=False)
+    log = keras.callbacks.TensorBoard(log_dir=arg.log_dir, write_graph=False)
     callbacks.append(log)
 
 

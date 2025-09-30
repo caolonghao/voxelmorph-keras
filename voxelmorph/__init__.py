@@ -18,13 +18,13 @@ if curv is None or version.parse(curv) < version.parse(minv):
     raise ImportError(f'voxelmorph requires neurite version {minv} or greater, '
                       f'but found version {curv}')
 
-import tensorflow
-# ensure valid tensorflow version is available
-minv = '2.4'
-curv = getattr(tensorflow, '__version__', None)
+import keras
+# ensure valid keras version is available
+minv = '3.0.0'
+curv = getattr(keras, '__version__', None)
 if curv is None or version.parse(curv) < version.parse(minv):
-    raise ImportError(f'voxelmorph requires tensorflow version {minv} or greater, '
-                        f'but found version {curv}')
+    raise ImportError(f'voxelmorph requires keras version {minv} or greater, '
+                      f'but found version {curv}')
 
 
 from . import py
@@ -33,3 +33,4 @@ from . import generators
 from . import layers
 from . import losses
 from . import networks
+from . import keras_backend as tf

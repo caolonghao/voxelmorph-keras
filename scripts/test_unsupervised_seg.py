@@ -26,8 +26,9 @@ License.
 import os
 import argparse
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras import backend as K
+import keras
+from voxelmorph import keras_backend as tf
+from keras import backend as K
 import voxelmorph as vxm
 
 

@@ -1,10 +1,10 @@
 # third party imports
 import numpy as np
-import tensorflow as tf
 
 # local imports
 import neurite as ne
 from . import utils
+from .. import keras_backend as tf
 
 
 def draw_flip_matrix(grid_shape, shift_center=True, last_row=True, dtype=tf.float32, seed=None):

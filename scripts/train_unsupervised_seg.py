@@ -27,8 +27,9 @@ import os
 import random
 import argparse
 import numpy as np
-import tensorflow as tf
-from tensorflow.keras import backend as K
+import keras
+from voxelmorph import keras_backend as tf
+from keras import backend as K
 import voxelmorph as vxm
 
 
@@ -113,8 +114,9 @@ os.makedirs(model_dir, exist_ok=True)
 
 # tensorflow device handling
 device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
-assert np.mod(args.batch_size, nb_devices) == 0,
-'Batch size (%d) should be a multiple of the nr of gpus (%d)' % (args.batch_size, nb_devices)
+assert np.mod(args.batch_size, nb_devices) == 0, (
+    'Batch size (%d) should be a multiple of the nr of gpus (%d)' % (args.batch_size, nb_devices)
+)
 
 # unet architecture
 enc_nf = args.enc if args.enc else [16, 32, 32, 32]
@@ -155,11 +157,11 @@ weights = [1.0, grad_weight]
 # multi-gpu support
 if nb_devices > 1:
     save_callback = vxm.networks.ModelCheckpointParallel(save_filename)
-    model = tf.keras.utils.multi_gpu_model(model, gpus=nb_devices)
+    model = keras.utils.multi_gpu_model(model, gpus=nb_devices)
 else:
-    save_callback = tf.keras.callbacks.ModelCheckpoint(save_filename, period=20)
+    save_callback = keras.callbacks.ModelCheckpoint(save_filename, period=20)
 
-model.compile(optimizer=tf.keras.optimizers.Adam(lr=args.lr), loss=losses, loss_weights=weights)
+model.compile(optimizer=keras.optimizers.Adam(lr=args.lr), loss=losses, loss_weights=weights)
 
 # save starting weights
 model.save(save_filename.format(epoch=args.initial_epoch))

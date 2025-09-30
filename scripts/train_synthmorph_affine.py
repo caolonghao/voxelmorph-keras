@@ -16,7 +16,8 @@
 import pathlib
 import argparse
 import numpy as np
-import tensorflow as tf
+import keras
+from voxelmorph import keras_backend as tf
 import neurite as ne
 import voxelmorph as vxm
 
@@ -78,7 +79,7 @@ arg = p.parse_args()
 
 # TensorFlow
 gpu, num_gpu = vxm.tf.utils.setup_device(arg.gpu)
-assert tf.__version__.startswith('2'), f'TensorFlow version {tf.__version__} is not 2'
+assert int(keras.__version__.split('.')[0]) >= 3, f'Keras version {keras.__version__} is not 3 or later'
 
 
 # output directories
@@ -124,7 +125,7 @@ ima_2, map_2 = gen_model_2.outputs
 # registration
 inputs = (*gen_model_1.inputs, *gen_model_2.inputs)
 model = vxm.networks.VxmAffineFeatureDetector(
-    input_model=tf.keras.Model(inputs, outputs=(ima_1, ima_2)),
+    input_model=keras.Model(inputs, outputs=(ima_1, ima_2)),
     enc_nf=arg.enc,
     dec_nf=arg.dec,
     add_nf=arg.add,
@@ -147,23 +148,23 @@ map_2 = vxm.layers.SpatialTransformer(**prop)((map_2, scale_down))
 out = (mov_1, mov_2 if arg.mid_space else map_2)
 
 
-class AddLoss(tf.keras.layers.Layer):
+class AddLoss(keras.layers.Layer):
     def call(self, x):
         self.add_loss(vxm.losses.MSE().loss(*x))
         return x
 
 
 # loss
-model = tf.keras.Model(model.inputs, AddLoss()(out))
-optim = tf.keras.optimizers.Adam(learning_rate=arg.lr)
+model = keras.Model(model.inputs, AddLoss()(out))
+optim = keras.optimizers.Adam(learning_rate=arg.lr)
 model.compile(optim, jit_compile=False)
-models = [m for m in model.layers if isinstance(m, tf.keras.Model)]
+models = [m for m in model.layers if isinstance(m, keras.Model)]
 models[0].summary()
 
 
 # callbacks
 steps_per_epoch = 100
-save = tf.keras.callbacks.ModelCheckpoint(
+save = keras.callbacks.ModelCheckpoint(
     filepath=arg.model_dir / '{epoch:05d}.weights.h5',
     save_freq=steps_per_epoch * arg.save_freq,
     save_weights_only=True,
@@ -171,7 +172,7 @@ save = tf.keras.callbacks.ModelCheckpoint(
 callbacks = [save]
 
 if arg.log_dir:
-    log = tf.keras.callbacks.TensorBoard(log_dir=arg.log_dir, write_graph=False)
+    log = keras.callbacks.TensorBoard(log_dir=arg.log_dir, write_graph=False)
     callbacks.append(log)
 
 

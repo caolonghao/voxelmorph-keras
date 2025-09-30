@@ -26,7 +26,8 @@ import os
 import random
 import argparse
 import numpy as np
-import tensorflow as tf
+import keras
+from voxelmorph import keras_backend as tf
 import voxelmorph as vxm
 
 
@@ -159,11 +160,11 @@ weights = [args.image_loss_weight, 1 - args.image_loss_weight,
 # multi-gpu support
 if nb_devices > 1:
     save_callback = vxm.networks.ModelCheckpointParallel(save_filename)
-    model = tf.keras.utils.multi_gpu_model(model, gpus=nb_devices)
+    model = keras.utils.multi_gpu_model(model, gpus=nb_devices)
 else:
-    save_callback = tf.keras.callbacks.ModelCheckpoint(save_filename, period=20)
+    save_callback = keras.callbacks.ModelCheckpoint(save_filename, period=20)
 
-model.compile(optimizer=tf.keras.optimizers.Adam(lr=args.lr), loss=losses, loss_weights=weights)
+model.compile(optimizer=keras.optimizers.Adam(lr=args.lr), loss=losses, loss_weights=weights)
 
 # save starting weights
 model.save(save_filename.format(epoch=args.initial_epoch))

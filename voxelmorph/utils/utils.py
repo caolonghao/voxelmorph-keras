@@ -24,13 +24,14 @@ import warnings
 
 # third party imports
 import numpy as np
-import tensorflow as tf
-import tensorflow.keras.backend as K
-import tensorflow.keras.layers as KL
+import keras
+from keras import backend as K
+from keras import layers as KL
 
 # local imports
 import neurite as ne
 from .. import layers
+from .. import keras_backend as tf
 
 
 def setup_device(gpuid=None):
@@ -51,16 +52,9 @@ def setup_device(gpuid=None):
         device = '/gpu:' + gpuid
         os.environ['CUDA_VISIBLE_DEVICES'] = gpuid
 
-        # GPU memory configuration differs between TF 1 and 2
-        if hasattr(tf, 'ConfigProto'):
-            config = tf.ConfigProto()
-            config.gpu_options.allow_growth = True
-            config.allow_soft_placement = True
-            tf.keras.backend.set_session(tf.Session(config=config))
-        else:
-            tf.config.set_soft_device_placement(True)
-            for pd in tf.config.list_physical_devices('GPU'):
-                tf.config.experimental.set_memory_growth(pd, True)
+        tf.config.set_soft_device_placement(True)
+        for pd in tf.config.list_physical_devices('GPU'):
+            tf.config.experimental.set_memory_growth(pd, True)
     else:
         device = '/cpu:0'
         os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
@@ -399,7 +393,10 @@ def integrate_vec(vec, time_dep=False, method='ss', **kwargs):
 
             svec = svec / (2**nb_steps)
             for _ in range(nb_steps):
-                svec = svec[0::2] + tf.map_fn(transform, svec[1::2, :], svec[0::2, :])
+                prev = svec[0::2]
+                curr = svec[1::2]
+                updates = tf.map_fn(lambda pair: transform(pair[0], pair[1]), [curr, prev], fn_output_signature=curr.dtype)
+                svec = prev + updates
 
             disp = svec[0, :]
 
@@ -438,10 +435,9 @@ def integrate_vec(vec, time_dep=False, method='ss', **kwargs):
         z = out_time_pt[0:1] * 0.0
         K_out_time_pt = K.concatenate([z, out_time_pt], 0)
 
-        # enable a new integration function than tf.contrib.integrate.odeint
-        odeint_fn = tf.contrib.integrate.odeint
-        if 'odeint_fn' in kwargs.keys() and kwargs['odeint_fn'] is not None:
-            odeint_fn = kwargs['odeint_fn']
+        odeint_fn = kwargs.get('odeint_fn')
+        if odeint_fn is None:
+            raise NotImplementedError('ODE integration requires providing `odeint_fn` when using the Keras backend.')
 
         # process initialization
         if 'init' not in kwargs.keys() or kwargs['init'] == 'zero':
@@ -510,11 +506,11 @@ def keras_transform(img, trf, interp_method='linear', rescale=None):
     # or the transform function is integrating it with the rescale operation? 
     # This needs to be incorporated.
     """
-    img_input = tf.keras.Input(shape=img.shape[1:])
-    trf_input = tf.keras.Input(shape=trf.shape[1:])
+    img_input = keras.Input(shape=img.shape[1:])
+    trf_input = keras.Input(shape=trf.shape[1:])
     trf_scaled = trf_input if rescale is None else layers.RescaleTransform(rescale)(trf_input)
     y_img = layers.SpatialTransformer(interp_method=interp_method)([img_input, trf_scaled])
-    return tf.keras.Model([img_input, trf_input], y_img).predict([img, trf])
+    return keras.Model([img_input, trf_input], y_img).predict([img, trf])
 
 
 ###############################################################################
