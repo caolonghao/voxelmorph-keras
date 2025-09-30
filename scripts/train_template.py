@@ -11,9 +11,10 @@ import os
 os.environ['KERAS_BACKEND'] = 'torch'
 
 import numpy as np
+import torch
 import voxelmorph as vxm
 
-from keras import callbacks, optimizers
+from keras import callbacks, ops, optimizers
 
 from . import _torch_utils as cli
 
@@ -46,8 +47,8 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument('--grad-loss-weight', type=float, default=1.0, help='weight of deformation smoothness loss (default: 1.0)')
 
     # Registration field and integration controls
-    parser.add_argument('--reg-field', default='preintegrated', choices=['svf', 'preintegrated', 'postintegrated', 'warp'],
-                        help='registration field to output and regularize (default: preintegrated)')
+    parser.add_argument('--reg-field', default='warp', choices=['svf', 'preintegrated', 'postintegrated', 'warp'],
+                        help='registration field to output and regularize (default: warp)')
     parser.add_argument('--int-steps', type=int, default=7,
                         help='number of scaling-and-squaring integration steps (default: 7)')
 
@@ -76,26 +77,25 @@ def compute_initial_template(args, train_files):
 
 
 def make_generator(args, train_files, add_feat_axis):
-    base = vxm.generators.template_creation(
+    return vxm.generators.template_creation(
         train_files,
-        bidir=False,
+        bidir=True,
         batch_size=args.batch_size,
         add_feat_axis=add_feat_axis,
     )
 
-    while True:
-        inputs, outputs = next(base)
-        scan = outputs[0]
-        zeros = outputs[-1]
-        yield inputs, [scan, scan, zeros]
-
 
 def set_initial_atlas(model, atlas):
-    layer = model.get_layer(f'{model.name}_atlas_param')
-    layer.set_weights([atlas.squeeze(axis=0)])
+    if hasattr(model, 'set_atlas'):
+        model.set_atlas(atlas)
+    else:
+        layer = model.get_layer(f'{model.name}_atlas_param')
+        layer.set_weights([atlas.squeeze(axis=0)])
 
 
 def extract_atlas(model):
+    if hasattr(model, 'get_atlas'):
+        return model.get_atlas()
     layer = model.get_layer(f'{model.name}_atlas_param')
     return layer.get_weights()[0]
 
@@ -116,17 +116,52 @@ def build_model(args, inshape, nfeats):
 
 def compile_model(model, args):
     if args.image_loss == 'ncc':
-        image_loss = vxm.losses.NCC().loss
+        image_loss_obj = vxm.losses.NCC()
+        image_loss = image_loss_obj.loss
+
+        atlas_loss_obj = vxm.losses.NCC()
+
+        def atlas_loss(_, y_pred):
+            atlas_tensor = model.references.atlas_tensor
+            if hasattr(y_pred, 'ndim') and hasattr(atlas_tensor, 'shape'):
+                if y_pred.ndim + 1 == len(atlas_tensor.shape):
+                    if torch.is_tensor(y_pred):
+                        y_pred = torch.unsqueeze(y_pred, dim=-1)
+                    else:
+                        y_pred = ops.expand_dims(y_pred, axis=-1)
+            return atlas_loss_obj.loss(atlas_tensor, y_pred)
+
     else:
-        image_loss = vxm.losses.MSE().loss
+        image_loss_obj = vxm.losses.MSE()
+        image_loss = image_loss_obj.loss
+
+        def atlas_loss(_, y_pred):
+            atlas_tensor = model.references.atlas_tensor
+            if hasattr(y_pred, 'ndim') and hasattr(atlas_tensor, 'shape'):
+                if y_pred.ndim + 1 == len(atlas_tensor.shape):
+                    if torch.is_tensor(y_pred):
+                        y_pred = torch.unsqueeze(y_pred, dim=-1)
+                    else:
+                        y_pred = ops.expand_dims(y_pred, axis=-1)
+            return image_loss_obj.loss(atlas_tensor, y_pred)
 
     mean_loss = vxm.losses.MSE().loss
-    grad_loss = vxm.losses.Grad('l2').loss
+    grad_loss = vxm.losses.Grad('l2', loss_mult=2).loss
 
     model.compile(
         optimizer=optimizers.Adam(learning_rate=args.lr),
-        loss=[image_loss, mean_loss, grad_loss],
-        loss_weights=[args.image_loss_weight, args.mean_loss_weight, args.grad_loss_weight],
+        loss=[
+            image_loss,
+            atlas_loss,
+            mean_loss,
+            grad_loss,
+        ],
+        loss_weights=[
+            args.image_loss_weight,
+            1.0 - args.image_loss_weight,
+            args.mean_loss_weight,
+            args.grad_loss_weight,
+        ],
     )
 
 

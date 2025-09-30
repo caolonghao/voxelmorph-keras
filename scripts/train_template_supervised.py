@@ -243,7 +243,7 @@ def build_model(
     )
 
     image_input = template.inputs[0]
-    warped_image, atlas_image, flow = template.outputs
+    warped_image, atlas_image, _, flow = template.outputs
 
     seg_input = KL.Input(shape=(*inshape, nb_labels), name='template_creation_seg_input')
     atlas_seg_layer = ne.layers.LocalParamWithInput(

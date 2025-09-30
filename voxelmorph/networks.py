@@ -737,7 +737,7 @@ class VxmDenseSemiSupervisedPointCloud(ne.modelio.LoadableModel):
 
 
 class TemplateCreation(ne.modelio.LoadableModel):
-    """Register images to a learnable atlas template."""
+    """Register images to a learnable atlas template (TensorFlow-compatible API)."""
 
     @ne.modelio.store_config_args
     def __init__(
@@ -750,6 +750,8 @@ class TemplateCreation(ne.modelio.LoadableModel):
         int_steps: int = 7,
         src_feats: int = 1,
         atlas_feats: Optional[int] = None,
+        mean_cap: float = 100.0,
+        reg_field: str = 'warp',
         name: str = 'template_creation',
         **kwargs,
     ) -> None:
@@ -757,14 +759,19 @@ class TemplateCreation(ne.modelio.LoadableModel):
             atlas_feats = src_feats
 
         image_input = Input(shape=(*inshape, src_feats), name=f'{name}_image_input')
+        atlas_initializer = KI.RandomNormal(mean=0.0, stddev=1e-7)
         atlas_layer = ne.layers.LocalParamWithInput(
             shape=(*inshape, atlas_feats),
-            initializer='zeros',
+            initializer=atlas_initializer,
             name=f'{name}_atlas_param',
         )
         atlas_tensor = atlas_layer(image_input)
 
-        input_model = Model(inputs=[image_input], outputs=[image_input, atlas_tensor], name=f'{name}_inputs')
+        input_model = Model(
+            inputs=[image_input],
+            outputs=[atlas_tensor, image_input],
+            name=f'{name}_inputs',
+        )
 
         vxm_model = VxmDense(
             inshape,
@@ -773,28 +780,60 @@ class TemplateCreation(ne.modelio.LoadableModel):
             unet_feat_mult=unet_feat_mult,
             nb_unet_conv_per_level=nb_unet_conv_per_level,
             int_steps=int_steps,
-            bidir=False,
-            src_feats=src_feats,
-            trg_feats=atlas_feats,
+            bidir=True,
+            src_feats=atlas_feats,
+            trg_feats=src_feats,
             input_model=input_model,
+            reg_field=reg_field,
             name=f'{name}_core',
             **kwargs,
         )
 
         core_outputs = list(vxm_model.outputs)
         reg_output = core_outputs.pop(-1)
-        warped_image = core_outputs[0]
+        warped_atlas = core_outputs[0]
+        warped_image = core_outputs[1]
+
+        neg_flow = vxm_model.references.neg_flow
+        if neg_flow is None:
+            raise RuntimeError('TemplateCreation expects bidirectional flows to compute the mean stream.')
+
+        mean_stream = ne.layers.MeanStream(cap=mean_cap, name=f'{name}_mean_stream')(neg_flow)
 
         outputs = (
-            KL.Activation('linear', name=f'{name}_warped')(warped_image),
-            KL.Activation('linear', name=f'{name}_atlas')(atlas_tensor),
+            KL.Activation('linear', name=f'{name}_warped_image')(warped_atlas),
+            KL.Activation('linear', name=f'{name}_warped_atlas')(warped_image),
+            KL.Activation('linear', name=f'{name}_mean_stream_out')(mean_stream),
             KL.Activation('linear', name=f'{name}_reg')(reg_output),
         )
 
         super().__init__(inputs=[image_input], outputs=outputs, name=name)
 
-        self.references = vxm_model.references
+        self.references = ne.modelio.LoadableModel.ReferenceContainer()
+        self.references.vxm_model = vxm_model
+        self.references.atlas_layer = atlas_layer
+        self.references.atlas_tensor = atlas_tensor
         self.references.atlas = atlas_tensor
+        self.references.y_source = vxm_model.references.y_source
+        self.references.y_target = vxm_model.references.y_target
+        self.references.pos_flow = vxm_model.references.pos_flow
+        self.references.neg_flow = neg_flow
+        self.references.mean_stream = mean_stream
+        self.references.reg_output = reg_output
+
+    def set_atlas(self, atlas: np.ndarray) -> None:
+        """Set atlas parameters using the legacy TensorFlow helper signature."""
+
+        atlas = np.asarray(atlas)
+        if atlas.ndim >= 1 and atlas.shape[0] == 1:
+            atlas = atlas.reshape(atlas.shape[1:])
+        self.references.atlas_layer.set_weights([atlas.astype('float32')])
+
+    def get_atlas(self) -> np.ndarray:
+        """Return the current atlas weights without batch axis."""
+
+        atlas = self.references.atlas_layer.get_weights()[0]
+        return np.asarray(atlas)
 
 
 class ConditionalTemplateCreation(ne.modelio.LoadableModel):
