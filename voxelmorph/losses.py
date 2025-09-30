@@ -19,24 +19,26 @@ License.
 
 # third party
 import numpy as np
-import torch
-import torch.nn.functional as F
+from keras import ops
 import neurite as ne
 
 
 def _ensure_tensor(value, reference=None):
-    tensor = value if isinstance(value, torch.Tensor) else torch.as_tensor(value)
+    tensor = ops.convert_to_tensor(value)
     if reference is not None:
-        tensor = tensor.to(device=reference.device, dtype=reference.dtype)
+        tensor = ops.cast(tensor, ops.dtype(reference))
     return tensor
 
 
 def _flatten_batch(tensor):
-    return tensor.reshape(tensor.shape[0], -1)
+    shape = ops.shape(tensor)
+    flat_shape = ops.concatenate([shape[:1], ops.convert_to_tensor([-1], dtype=ops.dtype(shape))], axis=0)
+    return ops.reshape(tensor, flat_shape)
 
 
 def _safe_divide(numerator, denominator, eps=1e-8):
-    return torch.where(torch.abs(denominator) > eps, numerator / denominator, torch.zeros_like(numerator))
+    eps_tensor = ops.convert_to_tensor(eps, dtype=ops.dtype(denominator))
+    return ops.where(ops.abs(denominator) > eps_tensor, numerator / denominator, ops.zeros_like(numerator))
 
 
 def _diff_along_dim(tensor, dim):
@@ -58,10 +60,9 @@ class NCC:
         self.signed = signed
 
     def ncc(self, Ii, Ji):
-        if not isinstance(Ii, torch.Tensor):
-            Ii = torch.as_tensor(Ii)
-        if not isinstance(Ji, torch.Tensor):
-            Ji = torch.as_tensor(Ji, device=Ii.device, dtype=Ii.dtype)
+        Ii = ops.convert_to_tensor(Ii)
+        Ji = ops.convert_to_tensor(Ji)
+        Ji = ops.cast(Ji, ops.dtype(Ii))
 
         ndims = Ii.ndim - 2
         if ndims not in (1, 2, 3):
@@ -74,16 +75,13 @@ class NCC:
         else:
             win = [int(self.win)] * ndims
 
-        padding = tuple(w // 2 for w in win)
-        conv_fn = {1: F.conv1d, 2: F.conv2d, 3: F.conv3d}[ndims]
-
         def _conv(volume):
-            spatial = volume.shape[1:-1]
             channels = volume.shape[-1]
-            vol_cf = volume.permute(0, ndims + 1, *range(1, ndims + 1))
-            kernel = torch.ones((1, channels, *win), dtype=volume.dtype, device=volume.device)
-            conv = conv_fn(vol_cf, kernel, padding=padding)
-            return conv.permute(0, *range(2, 2 + ndims), 1)
+            kernel_shape = (*win, channels, 1)
+            kernel = ops.ones(kernel_shape, dtype=ops.dtype(volume))
+            strides = (1,) * ndims
+            conv = ops.nn.conv(volume, kernel, strides=strides, padding='same', data_format='channels_last')
+            return conv
 
         I2 = Ii * Ii
         J2 = Ji * Ji
@@ -95,19 +93,29 @@ class NCC:
         J2_sum = _conv(J2)
         IJ_sum = _conv(IJ)
 
-        win_size = float(np.prod(win) * Ii.shape[-1])
+        win_prod = np.prod(win)
+        channels = Ii.shape[-1]
+        if channels is None:
+            channels = ops.shape(Ii)[-1]
+        if isinstance(channels, int):
+            channels_tensor = ops.convert_to_tensor(channels, dtype=ops.dtype(Ii))
+        else:
+            channels_tensor = ops.cast(channels, ops.dtype(Ii))
+        win_size = ops.convert_to_tensor(win_prod, dtype=ops.dtype(Ii)) * channels_tensor
+
         u_I = I_sum / win_size
         u_J = J_sum / win_size
 
         cross = IJ_sum - u_J * I_sum - u_I * J_sum + u_I * u_J * win_size
-        cross = torch.clamp(cross, min=self.eps)
+        eps_tensor = ops.convert_to_tensor(self.eps, dtype=ops.dtype(cross))
+        cross = ops.maximum(cross, eps_tensor)
         I_var = I2_sum - 2 * u_I * I_sum + u_I * u_I * win_size
-        I_var = torch.clamp(I_var, min=self.eps)
+        I_var = ops.maximum(I_var, eps_tensor)
         J_var = J2_sum - 2 * u_J * J_sum + u_J * u_J * win_size
-        J_var = torch.clamp(J_var, min=self.eps)
+        J_var = ops.maximum(J_var, eps_tensor)
 
         if self.signed:
-            cc = cross / torch.sqrt(I_var * J_var + self.eps)
+            cc = cross / ops.sqrt(I_var * J_var + eps_tensor)
         else:
             cc = (cross / I_var) * (cross / J_var)
 
@@ -115,12 +123,11 @@ class NCC:
 
     def loss(self, y_true, y_pred, reduce='mean'):
         cc = self.ncc(y_true, y_pred)
-        batch = cc.shape[0]
-        flat = cc.reshape(batch, -1)
+        flat = _flatten_batch(cc)
         if reduce == 'mean':
-            cc = flat.mean(dim=1)
+            cc = ops.mean(flat, axis=1)
         elif reduce == 'max':
-            cc = flat.max(dim=1).values
+            cc = ops.max(flat, axis=1)
         elif reduce is not None:
             raise ValueError(f'Unknown NCC reduction type: {reduce}')
         return -cc
@@ -135,20 +142,17 @@ class MSE:
         self.image_sigma = image_sigma
 
     def mse(self, y_true, y_pred):
-        if not isinstance(y_true, torch.Tensor):
-            y_true = torch.as_tensor(y_true)
-        if not isinstance(y_pred, torch.Tensor):
-            y_pred = torch.as_tensor(y_pred, device=y_true.device, dtype=y_true.dtype)
-        return (y_true - y_pred) ** 2
+        y_true = ops.convert_to_tensor(y_true)
+        y_pred = ops.convert_to_tensor(y_pred)
+        y_pred = ops.cast(y_pred, ops.dtype(y_true))
+        return ops.square(y_true - y_pred)
 
     def loss(self, y_true, y_pred, reduce='mean'):
         mse = self.mse(y_true, y_pred)
-        if not isinstance(mse, torch.Tensor):
-            mse = torch.as_tensor(mse)
         if reduce == 'mean':
-            mse = torch.mean(mse)
+            mse = ops.mean(mse)
         elif reduce == 'max':
-            mse = torch.max(mse)
+            mse = ops.max(mse)
         elif reduce is not None:
             raise ValueError(f'Unknown MSE reduction type: {reduce}')
         return 1.0 / (self.image_sigma ** 2) * mse
@@ -171,21 +175,20 @@ class TukeyBiweight:
         self.csq = c * c  # squared error threshold
 
     def loss(self, y_true, y_pred):
-        if not isinstance(y_true, torch.Tensor):
-            y_true = torch.as_tensor(y_true)
-        if not isinstance(y_pred, torch.Tensor):
-            y_pred = torch.as_tensor(y_pred, device=y_true.device, dtype=y_true.dtype)
+        y_true = ops.convert_to_tensor(y_true)
+        y_pred = ops.convert_to_tensor(y_pred)
+        y_pred = ops.cast(y_pred, ops.dtype(y_true))
 
-        error_sq = (y_true - y_pred) ** 2
-        threshold = torch.tensor(self.csq, dtype=error_sq.dtype, device=error_sq.device)
-        mask_below = (error_sq <= threshold).to(error_sq.dtype)
-        rho_above = (error_sq > threshold).to(error_sq.dtype) * threshold / 2.0
+        error_sq = ops.square(y_true - y_pred)
+        threshold = ops.convert_to_tensor(self.csq, dtype=ops.dtype(error_sq))
+        mask_below = ops.cast(error_sq <= threshold, ops.dtype(error_sq))
+        rho_above = ops.cast(error_sq > threshold, ops.dtype(error_sq)) * threshold / 2.0
 
         inner = 1 - (error_sq * mask_below) / threshold
-        rho_below = (threshold / 2.0) * (1 - inner.pow(3))
+        rho_below = (threshold / 2.0) * (1 - ops.power(inner, 3))
         rho = rho_above + rho_below
 
-        return torch.mean(rho)
+        return ops.mean(rho)
 
 
 class Dice:
@@ -200,10 +203,10 @@ class Dice:
         ndims = y_pred.ndim - 2
         vol_axes = tuple(range(1, ndims + 1))
 
-        numerator = 2.0 * torch.sum(y_true * y_pred, dim=vol_axes)
-        denominator = torch.sum(y_true + y_pred, dim=vol_axes)
+        numerator = 2.0 * ops.sum(y_true * y_pred, axis=vol_axes)
+        denominator = ops.sum(y_true + y_pred, axis=vol_axes)
         dice = _safe_divide(numerator, denominator)
-        dice = torch.mean(dice)
+        dice = ops.mean(dice)
         return -dice
 
 
@@ -224,11 +227,9 @@ class Grad:
         y = _ensure_tensor(y)
         weight = None
         if self.vox_weight is not None:
-            if not isinstance(self.vox_weight, torch.Tensor) or \
-               self.vox_weight.device != y.device or \
-               self.vox_weight.dtype != y.dtype:
-                self.vox_weight = _ensure_tensor(self.vox_weight, y)
-            weight = self.vox_weight
+            if not hasattr(self, '_vox_weight_tensor') or ops.dtype(self._vox_weight_tensor) != ops.dtype(y):
+                self._vox_weight_tensor = _ensure_tensor(self.vox_weight, y)
+            weight = self._vox_weight_tensor
 
         diffs = []
         for axis in range(1, y.ndim - 1):
@@ -248,14 +249,14 @@ class Grad:
         """
         diffs = self._diffs(y_pred)
         if self.penalty == 'l1':
-            diffs = [torch.abs(f) for f in diffs]
+            diffs = [ops.abs(f) for f in diffs]
         else:
             if self.penalty != 'l2':
                 raise ValueError(f"penalty can only be l1 or l2. Got: {self.penalty}")
-            diffs = [f * f for f in diffs]
+            diffs = [ops.square(f) for f in diffs]
 
-        flattened = [_flatten_batch(f).mean(dim=1) for f in diffs]
-        grad = torch.stack(flattened, dim=0).mean(dim=0)
+        flattened = [ops.mean(_flatten_batch(f), axis=1) for f in diffs]
+        grad = ops.mean(ops.stack(flattened, axis=0), axis=0)
 
         if self.loss_mult is not None:
             grad = grad * self.loss_mult
@@ -267,7 +268,7 @@ class Grad:
         returns Tensor of size ()
         """
 
-        return torch.mean(self.loss(y_true, y_pred))
+        return ops.mean(self.loss(y_true, y_pred))
 
 
 class KL:
@@ -284,7 +285,7 @@ class KL:
         ndims = len(vol_shape)
         components = []
         for axis in range(ndims):
-            deg = torch.full(vol_shape, 2.0, dtype=dtype, device=device)
+            deg = np.full(vol_shape, 2.0, dtype=np.float32)
             if vol_shape[axis] > 1:
                 slices = [slice(None)] * ndims
                 slices[axis] = 0
@@ -292,20 +293,21 @@ class KL:
                 slices[axis] = -1
                 deg[tuple(slices)] = 1.0
             else:
-                deg.fill_(1.0)
+                deg.fill(1.0)
             components.append(deg)
 
-        stacked = torch.stack(components, dim=-1)
-        return stacked.unsqueeze(0)
+        stacked = np.stack(components, axis=-1)
+        tensor = ops.convert_to_tensor(stacked, dtype=dtype)
+        tensor = ops.expand_dims(tensor, axis=0)
+        return tensor
 
     def prec_loss(self, y_pred):
         y_pred = _ensure_tensor(y_pred)
         ndims = y_pred.shape[-1]
-
-        total = 0.0
+        total = ops.convert_to_tensor(0.0, dtype=ops.dtype(y_pred))
         for axis in range(1, y_pred.ndim - 1):
             diff = _diff_along_dim(y_pred, axis)
-            total += torch.mean(diff * diff)
+            total = total + ops.mean(ops.square(diff))
 
         return 0.5 * total / ndims
 
@@ -322,11 +324,11 @@ class KL:
         mean = y_pred[..., :ndims]
         log_sigma = y_pred[..., ndims:]
 
-        if self.D is None or self.D.device != y_pred.device or self.D.dtype != y_pred.dtype:
-            self.D = self._degree_matrix(self.flow_vol_shape, y_pred.device, y_pred.dtype)
+        if self.D is None or ops.dtype(self.D) != ops.dtype(y_pred):
+            self.D = self._degree_matrix(self.flow_vol_shape, None, ops.dtype(y_pred))
 
-        sigma_term = self.prior_lambda * self.D * torch.exp(log_sigma) - log_sigma
-        sigma_term = torch.mean(sigma_term)
+        sigma_term = self.prior_lambda * self.D * ops.exp(log_sigma) - log_sigma
+        sigma_term = ops.mean(sigma_term)
         prec_term = self.prior_lambda * self.prec_loss(mean)
 
         return 0.5 * ndims * (sigma_term + prec_term)
