@@ -33,10 +33,6 @@ import voxelmorph as vxm
 from keras import backend as K
 
 
-# disable eager execution
-tf.compat.v1.disable_eager_execution()
-
-
 # parse the commandline
 parser = argparse.ArgumentParser()
 
@@ -180,7 +176,10 @@ def grad_loss(y_true, y_pred):
 
 model.compile(optimizer=keras.optimizers.Adam(lr=args.lr), loss=[image_loss, grad_loss])
 
-save_callback = keras.callbacks.ModelCheckpoint(save_filename, period=100)
+save_callback = keras.callbacks.ModelCheckpoint(
+    save_filename,
+    save_freq=args.steps_per_epoch * 100
+)
 
 model.fit_generator(generator,
                     initial_epoch=args.initial_epoch,

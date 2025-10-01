@@ -136,29 +136,29 @@ reg_args = dict(
 
 
 # build model
-strategy = 'MirroredStrategy' if nb_devices > 1 else 'get_strategy'
-with getattr(tf.distribute, strategy)().scope():
+if nb_devices > 1:
+    raise NotImplementedError('Multi-GPU training is not implemented in this Keras backend build.')
 
-    # generation
-    gen_model_1 = ne.models.labels_to_image_old(**gen_args, id=0)
-    gen_model_2 = ne.models.labels_to_image_old(**gen_args, id=1)
-    ima_1, map_1 = gen_model_1.outputs
-    ima_2, map_2 = gen_model_2.outputs
+# generation
+gen_model_1 = ne.models.labels_to_image_old(**gen_args, id=0)
+gen_model_2 = ne.models.labels_to_image_old(**gen_args, id=1)
+ima_1, map_1 = gen_model_1.outputs
+ima_2, map_2 = gen_model_2.outputs
 
-    # registration
-    inputs = gen_model_1.inputs + gen_model_2.inputs
-    reg_args['inshape'] = ima_1.shape[1:-1]
-    reg_args['input_model'] = keras.Model(inputs, outputs=(ima_1, ima_2))
-    model = vxm.networks.VxmDense(**reg_args)
-    flow = model.references.pos_flow
-    pred = vxm.layers.SpatialTransformer(interp_method='linear', name='pred')([map_1, flow])
+# registration
+inputs = gen_model_1.inputs + gen_model_2.inputs
+reg_args['inshape'] = ima_1.shape[1:-1]
+reg_args['input_model'] = keras.Model(inputs, outputs=(ima_1, ima_2))
+model = vxm.networks.VxmDense(**reg_args)
+flow = model.references.pos_flow
+pred = vxm.layers.SpatialTransformer(interp_method='linear', name='pred')([map_1, flow])
 
-    # losses and compilation
-    const = tf.ones(shape=arg.batch_size // nb_devices)
-    model.add_loss(vxm.losses.Dice().loss(map_2, pred) + const)
-    model.add_loss(vxm.losses.Grad('l2', loss_mult=arg.reg_param).loss(None, flow))
-    model.compile(optimizer=keras.optimizers.Adam(learning_rate=arg.lr))
-    model.summary()
+# losses and compilation
+const = tf.ones(shape=arg.batch_size)
+model.add_loss(vxm.losses.Dice().loss(map_2, pred) + const)
+model.add_loss(vxm.losses.Grad('l2', loss_mult=arg.reg_param).loss(None, flow))
+model.compile(optimizer=keras.optimizers.Adam(learning_rate=arg.lr))
+model.summary()
 
 
 # callbacks

@@ -10,7 +10,6 @@ from __future__ import annotations
 import math
 import time
 import types
-import warnings
 from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
 
 import numpy as np
@@ -18,7 +17,6 @@ import numpy as np
 import keras
 from keras import ops
 from keras import random as keras_random
-from keras import utils as keras_utils
 
 # -----------------------------------------------------------------------------
 # DTypes
@@ -31,29 +29,6 @@ int16 = "int16"
 int32 = "int32"
 int64 = "int64"
 __version__ = keras.__version__
-
-if not hasattr(keras_utils, "multi_gpu_model"):
-    def _multi_gpu_model(model, gpus, **kwargs):
-        warnings.warn("multi_gpu_model is not available in Keras 3; returning the original model.")
-        return model
-
-    keras_utils.multi_gpu_model = _multi_gpu_model
-
-_ModelCheckpointBase = keras.callbacks.ModelCheckpoint
-
-class _PatchedModelCheckpoint(_ModelCheckpointBase):
-    def __init__(self, *args, period: int = 1, **kwargs):
-        self._period = max(1, int(period))
-        if 'save_freq' not in kwargs:
-            kwargs['save_freq'] = 'epoch'
-        super().__init__(*args, **kwargs)
-
-    def on_epoch_end(self, epoch, logs=None):
-        if (epoch + 1) % self._period == 0:
-            super().on_epoch_end(epoch, logs)
-
-if 'period' not in _ModelCheckpointBase.__init__.__code__.co_varnames:
-    keras.callbacks.ModelCheckpoint = _PatchedModelCheckpoint
 
 
 class _DTypes:
@@ -419,28 +394,6 @@ class _Config:
 config = _Config()
 
 
-class _StrategyScope:
-    def __enter__(self):
-        return None
-
-    def __exit__(self, exc_type, exc, tb):
-        return False
-
-
-class _Strategy:
-    def __init__(self, *args, **kwargs):
-        pass
-
-    def scope(self):
-        return _StrategyScope()
-
-
-class _Distribute:
-    def __getattr__(self, _name: str):
-        return lambda *args, **kwargs: _Strategy()
-
-
-distribute = _Distribute()
 
 
 class _Debugging:

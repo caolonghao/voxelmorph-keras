@@ -31,10 +31,6 @@ from voxelmorph import keras_backend as tf
 import voxelmorph as vxm
 
 
-# disable eager execution
-tf.compat.v1.disable_eager_execution()
-
-
 # parse the commandline
 parser = argparse.ArgumentParser()
 
@@ -140,13 +136,14 @@ losses = [image_loss_func, vxm.losses.Grad(
     'l2', loss_mult=args.int_downsize).loss, vxm.losses.Dice().loss]
 weights = [1, args.grad_loss_weight, args.dice_loss_weight]
 
-# multi-gpu support
-nb_devices = len(args.gpu.split(','))
+# multi-gpu support is handled externally
 if nb_devices > 1:
-    save_callback = vxm.networks.ModelCheckpointParallel(save_filename)
-    model = keras.utils.multi_gpu_model(model, gpus=nb_devices)
-else:
-    save_callback = keras.callbacks.ModelCheckpoint(save_filename, period=20)
+    raise NotImplementedError('Multi-GPU training is not implemented in this Keras backend build.')
+
+save_callback = keras.callbacks.ModelCheckpoint(
+    save_filename,
+    save_freq=args.steps_per_epoch * 20
+)
 
 model.compile(optimizer=keras.optimizers.Adam(lr=args.lr), loss=losses, loss_weights=weights)
 

@@ -98,6 +98,9 @@ arg = p.parse_args()
 gpu, num_gpu = vxm.tf.utils.setup_device(arg.gpu)
 assert int(keras.__version__.split('.')[0]) >= 3, f'Keras version {keras.__version__} is not 3 or later'
 
+if num_gpu > 1:
+    raise NotImplementedError('Multi-GPU training is not implemented in this Keras backend build.')
+
 
 # output directories
 if arg.sub_dir:
