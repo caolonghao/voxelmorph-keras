@@ -76,6 +76,27 @@ parser.add_argument('--dice-loss-weight', type=float, default=0.01,
 args = parser.parse_args()
 
 
+def _load_labels_argument(value):
+    """Load labels from file path or parse an inline list."""
+    if os.path.isfile(value):
+        return np.load(value)
+
+    cleaned = value.strip()
+    if cleaned.startswith('[') and cleaned.endswith(']'):
+        cleaned = cleaned[1:-1]
+
+    if not cleaned:
+        raise ValueError('Labels input is empty.')
+
+    try:
+        tokens = cleaned.replace(',', ' ').split()
+        return np.array([int(tok) for tok in tokens], dtype='int32')
+    except ValueError as exc:
+        raise ValueError(
+            'Unable to parse labels from "{}". Provide a .npy file or a comma/space-separated list.'.format(value)
+        ) from exc
+
+
 # sanity check on inputs
 if args.img_prefix == args.seg_prefix and args.img_suffix == args.seg_suffix:
     print('Error: Must provide a differing file suffix and/or prefix for images and segs.')
@@ -87,7 +108,7 @@ train_segs = vxm.py.utils.read_file_list(args.img_list, prefix=args.seg_prefix,
 assert len(train_imgs) > 0, 'Could not find any training data.'
 
 # load labels file
-train_labels = np.load(args.labels)
+train_labels = _load_labels_argument(args.labels)
 
 # generator (scan-to-scan unless the atlas cmd argument was provided)
 generator = vxm.generators.semisupervised(
