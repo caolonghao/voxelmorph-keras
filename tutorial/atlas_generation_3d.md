@@ -37,7 +37,7 @@ Passing `--init-template some_atlas.nii.gz` seeds the learnable template. If you
 
 ## 4. Launch atlas training
 ```
-python scripts/train_template.py \
+python -m voxelmorph.scripts.train_template \
     --img-list train_scans.txt \
     --model-dir outputs/atlas3d \
     --gpu 0 \
@@ -73,7 +73,7 @@ PY
 ## 6. Register subjects into atlas space
 Use the saved atlas weights with the standard registration script:
 ```
-python scripts/register.py \
+python -m voxelmorph.scripts.register \
     --moving some_subject.nii.gz \
     --fixed outputs/atlas3d/template.nii.gz \
     --moved outputs/atlas3d/some_subject_in_atlas.nii.gz \
@@ -128,7 +128,7 @@ template = vxm.networks.TemplateCreation(
 )
 
 image_input = template.inputs[0]
-warped_image, atlas_image, flow = template.outputs
+warped_image, atlas_image, _, flow = template.outputs
 seg_input = KL.Input(shape=(*inshape, nb_labels), name='seg_input')
 
 atlas_seg_layer = ne.layers.LocalParamWithInput(
@@ -150,9 +150,9 @@ model = keras.Model(
 Expose Dice weights as CLI flags so you can balance segmentation supervision:
 
 ```
-python scripts/train_template_supervised.py \
+python -m voxelmorph.scripts.train_template_supervised \
     --data-csv train_pairs.csv \
-    --labels labels.npy \
+    --labels-list 1 \
     --dice-loss-weight 1.5 \
     --atlas-dice-loss-weight 0.5 \
     --model-dir outputs/atlas3d_supervised \
