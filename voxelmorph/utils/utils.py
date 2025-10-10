@@ -221,7 +221,7 @@ def transform(vol, loc_shift, interp_method='linear', fill_value=None,
         'with {}D transform'.format(nb_dims, vol.shape[:-1], loc_shift.shape[-1])
 
     # location should be mesh and delta
-    mesh = ne.utils.volshape_to_meshgrid(loc_volshape, indexing='ij')  # volume mesh
+    mesh = list(ne.utils.volshape_to_meshgrid(loc_volshape, indexing='ij'))  # volume mesh
     for d, m in enumerate(mesh):
         if m.dtype != loc_shift.dtype:
             mesh[d] = tf.cast(m, loc_shift.dtype)
