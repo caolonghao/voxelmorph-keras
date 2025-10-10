@@ -165,10 +165,11 @@ model.compile(optimizer=keras.optimizers.Adam(learning_rate=args.lr), loss=losse
 # save starting weights
 model.save(save_filename.format(epoch=args.initial_epoch))
 
-model.fit_generator(generator,
-                    initial_epoch=args.initial_epoch,
-                    epochs=args.epochs,
-                    steps_per_epoch=args.steps_per_epoch,
-                    callbacks=[save_callback],
-                    verbose=1
-                    )
+model.fit(
+    generator,
+    initial_epoch=args.initial_epoch,
+    epochs=args.epochs,
+    steps_per_epoch=args.steps_per_epoch,
+    callbacks=[save_callback],
+    verbose=1,
+)

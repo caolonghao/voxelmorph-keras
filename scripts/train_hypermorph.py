@@ -182,12 +182,14 @@ save_callback = keras.callbacks.ModelCheckpoint(
     save_freq=args.steps_per_epoch * 100
 )
 
-model.fit_generator(generator,
-                    initial_epoch=args.initial_epoch,
-                    epochs=args.epochs,
-                    steps_per_epoch=args.steps_per_epoch,
-                    callbacks=[save_callback],
-                    verbose=1)
+model.fit(
+    generator,
+    initial_epoch=args.initial_epoch,
+    epochs=args.epochs,
+    steps_per_epoch=args.steps_per_epoch,
+    callbacks=[save_callback],
+    verbose=1,
+)
 
 # save final weights
 model.save(save_filename.format(epoch=args.epochs))
