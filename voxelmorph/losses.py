@@ -24,9 +24,27 @@ import warnings
 # third party
 import numpy as np
 import neurite as ne
-from keras import backend as K
 
 from . import keras_backend as tf
+
+
+def _shape_list(tensor):
+    """Return tensor static shape as a Python list if available, else None."""
+    shape = getattr(tensor, "shape", None)
+    if shape is None:
+        return None
+    if hasattr(shape, "as_list"):
+        return list(shape.as_list())
+    try:
+        return list(shape)
+    except TypeError:  # pragma: no cover - defensive fallback
+        return None
+
+
+def _batch_flatten(x):
+    """Flatten all dimensions except batch for reduction-friendly ops."""
+    batch = tf.shape(x)[0]
+    return tf.reshape(x, (batch, -1))
 
 
 class NCC:
@@ -42,7 +60,10 @@ class NCC:
     def ncc(self, Ii, Ji):
         # get dimension of volume
         # assumes Ii, Ji are sized [batch_size, *vol_shape, nb_feats]
-        ndims = len(Ii.get_shape().as_list()) - 2
+        shape = _shape_list(Ii)
+        if shape is None:
+            raise ValueError("Tensor shape is unknown; cannot compute NCC dimensions.")
+        ndims = len(shape) - 2
         assert ndims in [1, 2, 3], "volumes should be 1 to 3 dimensions. found: %d" % ndims
 
         # set window size
@@ -60,7 +81,10 @@ class NCC:
         IJ = Ii * Ji
 
         # compute filters
-        in_ch = Ji.get_shape().as_list()[-1]
+        ji_shape = _shape_list(Ji)
+        if ji_shape is None or ji_shape[-1] is None:
+            raise ValueError("Channel dimension must be statically known for NCC.")
+        in_ch = ji_shape[-1]
         # sum_filt = tf.ones([*self.win, in_ch, 1])
         sum_filt = tf.ones([*self.win, in_ch, 1], dtype=Ii.dtype)
         strides = 1
@@ -101,9 +125,9 @@ class NCC:
         cc = self.ncc(y_true, y_pred)
         # reduce
         if reduce == 'mean':
-            cc = tf.reduce_mean(K.batch_flatten(cc), axis=-1)
+            cc = tf.reduce_mean(_batch_flatten(cc), axis=-1)
         elif reduce == 'max':
-            cc = tf.reduce_max(K.batch_flatten(cc), axis=-1)
+            cc = tf.reduce_max(_batch_flatten(cc), axis=-1)
         elif reduce is not None:
             raise ValueError(f'Unknown NCC reduction type: {reduce}')
         # loss
@@ -119,16 +143,16 @@ class MSE:
         self.image_sigma = image_sigma
 
     def mse(self, y_true, y_pred):
-        return K.square(y_true - y_pred)
+        return tf.square(y_true - y_pred)
 
     def loss(self, y_true, y_pred, reduce='mean'):
         # compute mse
         mse = self.mse(y_true, y_pred)
         # reduce
         if reduce == 'mean':
-            mse = K.mean(mse)
+            mse = tf.reduce_mean(mse)
         elif reduce == 'max':
-            mse = K.max(mse)
+            mse = tf.reduce_max(mse)
         elif reduce is not None:
             raise ValueError(f'Unknown MSE reduction type: {reduce}')
         # loss
@@ -168,7 +192,10 @@ class Dice:
     """
 
     def loss(self, y_true, y_pred):
-        ndims = len(y_pred.get_shape().as_list()) - 2
+        shape = _shape_list(y_pred)
+        if shape is None:
+            raise ValueError("Tensor shape is unknown; cannot compute Dice loss.")
+        ndims = len(shape) - 2
         vol_axes = list(range(1, ndims + 1))
 
         top = 2 * tf.reduce_sum(y_true * y_pred, vol_axes)
@@ -194,7 +221,10 @@ class Grad:
         self.vox_weight = vox_weight
 
     def _diffs(self, y):
-        vol_shape = y.get_shape().as_list()[1:-1]
+        vol_shape = _shape_list(y)
+        if vol_shape is None:
+            raise ValueError("Tensor shape is unknown; cannot compute gradient loss.")
+        vol_shape = vol_shape[1:-1]
         ndims = len(vol_shape)
 
         df = [None] * ndims
@@ -202,11 +232,11 @@ class Grad:
             d = i + 1
             # permute dimensions to put the ith dimension first
             r = [d, *range(d), *range(d + 1, ndims + 2)]
-            yp = K.permute_dimensions(y, r)
+            yp = tf.transpose(y, perm=r)
             dfi = yp[1:, ...] - yp[:-1, ...]
 
             if self.vox_weight is not None:
-                w = K.permute_dimensions(self.vox_weight, r)
+                w = tf.transpose(self.vox_weight, perm=r)
                 # TODO: Need to add square root, since for non-0/1 weights this is bad.
                 dfi = w[1:, ...] * dfi
 
@@ -214,7 +244,7 @@ class Grad:
             # note: this might not be necessary for this loss specifically,
             # since the results are just summed over anyway.
             r = [*range(1, d + 1), 0, *range(d + 1, ndims + 2)]
-            df[i] = K.permute_dimensions(dfi, r)
+            df[i] = tf.transpose(dfi, perm=r)
 
         return df
 
@@ -229,7 +259,7 @@ class Grad:
             assert self.penalty == 'l2', 'penalty can only be l1 or l2. Got: %s' % self.penalty
             dif = [f * f for f in self._diffs(y_pred)]
 
-        df = [tf.reduce_mean(K.batch_flatten(f), axis=-1) for f in dif]
+        df = [tf.reduce_mean(_batch_flatten(f), axis=-1) for f in dif]
         grad = tf.add_n(df) / len(df)
 
         if self.loss_mult is not None:
@@ -242,7 +272,7 @@ class Grad:
         returns Tensor of size ()
         """
 
-        return K.mean(self.loss(y_true, y_pred))
+        return tf.reduce_mean(self.loss(y_true, y_pred))
 
 
 class KL:
@@ -287,7 +317,7 @@ class KL:
         conv_fn = getattr(tf.nn, 'conv%dd' % ndims)
 
         # prepare tf filter
-        z = K.ones([1] + sz)
+        z = tf.ones([1] + sz)
         filt_tf = tf.convert_to_tensor(self._adj_filt(ndims), dtype=tf.float32)
         strides = [1] * (ndims + 2)
         return conv_fn(z, filt_tf, strides, "SAME")
@@ -303,7 +333,10 @@ class KL:
         Note: could probably do with a difference filter, 
         but the edges would be complicated unless tensorflow allowed for edge copying
         """
-        vol_shape = y_pred.get_shape().as_list()[1:-1]
+        vol_shape = _shape_list(y_pred)
+        if vol_shape is None:
+            raise ValueError("Tensor shape is unknown; cannot compute KL loss.")
+        vol_shape = vol_shape[1:-1]
         ndims = len(vol_shape)
 
         sm = 0
@@ -311,9 +344,9 @@ class KL:
             d = i + 1
             # permute dimensions to put the ith dimension first
             r = [d, *range(d), *range(d + 1, ndims + 2)]
-            y = K.permute_dimensions(y_pred, r)
+            y = tf.transpose(y_pred, perm=r)
             df = y[1:, ...] - y[:-1, ...]
-            sm += K.mean(df * df)
+            sm += tf.reduce_mean(df * df)
 
         return 0.5 * sm / ndims
 
@@ -327,7 +360,10 @@ class KL:
         """
 
         # prepare inputs
-        ndims = len(y_pred.get_shape()) - 2
+        shape = _shape_list(y_pred)
+        if shape is None:
+            raise ValueError("Tensor shape is unknown; cannot compute KL loss.")
+        ndims = len(shape) - 2
         mean = y_pred[..., 0:ndims]
         log_sigma = y_pred[..., ndims:]
 
@@ -339,7 +375,7 @@ class KL:
 
         # sigma terms
         sigma_term = self.prior_lambda * self.D * tf.exp(log_sigma) - log_sigma
-        sigma_term = K.mean(sigma_term)
+        sigma_term = tf.reduce_mean(sigma_term)
 
         # precision terms
         # note needs 0.5 twice, one here (inside self.prec_loss), one below
