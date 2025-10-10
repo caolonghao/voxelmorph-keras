@@ -31,9 +31,8 @@ def _ensure_tensor(value, reference=None):
 
 
 def _flatten_batch(tensor):
-    shape = ops.shape(tensor)
-    flat_shape = ops.concatenate([shape[:1], ops.convert_to_tensor([-1], dtype=ops.dtype(shape))], axis=0)
-    return ops.reshape(tensor, flat_shape)
+    batch_size = ops.shape(tensor)[0]
+    return ops.reshape(tensor, (batch_size, -1))
 
 
 def _safe_divide(numerator, denominator, eps=1e-8):
