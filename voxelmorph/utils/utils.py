@@ -35,6 +35,46 @@ from .. import layers
 from .. import keras_backend as tf
 
 
+def _is_floating_tensor(value):
+    """Return True if `value` has a floating-point dtype in any supported backend."""
+    dtype = getattr(value, 'dtype', None)
+    if dtype is None:
+        return False
+
+    # KerasTensors expose dtype as a string.
+    if isinstance(dtype, str):
+        return dtype.startswith(('float', 'double', 'bfloat'))
+
+    # NumPy dtype instances.
+    if isinstance(dtype, np.dtype):
+        return np.issubdtype(dtype, np.floating)
+
+    # TensorFlow dtypes expose `is_floating`.
+    attr = getattr(dtype, 'is_floating', None)
+    if attr is not None:
+        return bool(attr() if callable(attr) else attr)
+
+    # PyTorch dtypes expose `is_floating_point`.
+    attr = getattr(dtype, 'is_floating_point', None)
+    if attr is not None:
+        return bool(attr() if callable(attr) else attr)
+
+    # Last resort: attempt to convert to NumPy dtype.
+    try:
+        return np.issubdtype(np.dtype(dtype), np.floating)
+    except Exception:  # pragma: no cover - defensive fallback
+        return False
+
+
+def _ensure_float_tensor(value, dtype=tf.float32):
+    """Convert `value` to a tensor with floating dtype if necessary."""
+    if not tf.is_tensor(value):
+        return tf.as_tensor(value, dtype=dtype)
+    if not _is_floating_tensor(value):
+        return tf.cast(value, dtype)
+    return value
+
+
 def setup_device(gpuid=None):
     """
     Configure the compute device using the native PyTorch backend.
@@ -159,10 +199,8 @@ def transform(vol, loc_shift, interp_method='linear', fill_value=None,
 
     # convert data type if needed
     ftype = tf.float32
-    if not tf.is_tensor(vol) or not vol.dtype.is_floating:
-        vol = tf.cast(vol, ftype)
-    if not tf.is_tensor(loc_shift) or not loc_shift.dtype.is_floating:
-        loc_shift = tf.cast(loc_shift, ftype)
+    vol = _ensure_float_tensor(vol, dtype=ftype)
+    loc_shift = _ensure_float_tensor(loc_shift, dtype=ftype)
 
     # convert affine to location shift (will validate affine shape)
     if is_affine_shape(loc_shift.shape):
@@ -172,7 +210,7 @@ def transform(vol, loc_shift, interp_method='linear', fill_value=None,
 
     # parse spatial location shape, including channels if available
     loc_volshape = loc_shift.shape[:-1]
-    if isinstance(loc_volshape, (tf.compat.v1.Dimension, tf.TensorShape)):
+    if hasattr(loc_volshape, 'as_list'):
         loc_volshape = loc_volshape.as_list()
 
     # volume dimensions
@@ -309,8 +347,7 @@ def compose(transforms, interp_method='linear', shift_center=True, shape=None):
     curr = None
     for next in reversed(transforms):
 
-        if not tf.is_tensor(next) or not next.dtype.is_floating:
-            next = tf.cast(next, tf.float32)
+        next = _ensure_float_tensor(next)
 
         if curr is None:
             curr = next
@@ -686,11 +723,10 @@ def affine_to_dense_shift(matrix, shape, shift_center=True, warp_right=None):
         removed it in favor of default ij-indexing to minimize the potential for confusion.
 
     """
-    if isinstance(shape, (tf.compat.v1.Dimension, tf.TensorShape)):
+    if hasattr(shape, 'as_list'):
         shape = shape.as_list()
 
-    if not tf.is_tensor(matrix) or not matrix.dtype.is_floating:
-        matrix = tf.cast(matrix, tf.float32)
+    matrix = _ensure_float_tensor(matrix)
 
     # check input shapes
     ndims = len(shape)
@@ -709,7 +745,8 @@ def affine_to_dense_shift(matrix, shape, shift_center=True, warp_right=None):
 
     # optionally right-compose with warp field
     if warp_right is not None:
-        if not tf.is_tensor(warp_right) or warp_right.dtype != matrix.dtype:
+        warp_right = _ensure_float_tensor(warp_right, dtype=matrix.dtype)
+        if getattr(warp_right, 'dtype', None) != matrix.dtype:
             warp_right = tf.cast(warp_right, matrix.dtype)
         flat_shape = tf.concat((tf.shape(warp_right)[:-1 - ndims], (-1, ndims)), axis=0)
         warp_right = tf.reshape(warp_right, flat_shape)  # ... x nb_voxels x N
@@ -763,8 +800,7 @@ def angles_to_rotation_matrix(ang, deg=True, ndims=3):
     if isinstance(ang, (list, tuple)):
         ang = tf.stack(ang, axis=-1)
 
-    if not tf.is_tensor(ang) or not ang.dtype.is_floating:
-        ang = tf.cast(ang, dtype='float32')
+    ang = _ensure_float_tensor(ang, dtype='float32')
 
     # Add dimension to scalars
     if not ang.shape.as_list():
@@ -865,8 +901,7 @@ def params_to_affine_matrix(par,
     if isinstance(par, (list, tuple)):
         par = tf.stack(par, axis=-1)
 
-    if not tf.is_tensor(par) or not par.dtype.is_floating:
-        par = tf.cast(par, dtype='float32')
+    par = _ensure_float_tensor(par, dtype='float32')
 
     # Add dimension to scalars
     if not par.shape.as_list():
