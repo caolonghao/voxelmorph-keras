@@ -27,6 +27,7 @@ import numpy as np
 import keras
 from keras import backend as K
 from keras import layers as KL
+import torch
 
 # local imports
 import neurite as ne
@@ -36,30 +37,58 @@ from .. import keras_backend as tf
 
 def setup_device(gpuid=None):
     """
-    Configures the appropriate TF device from a cuda device string.
-    Returns the device id and total number of devices.
+    Configure the compute device using the native PyTorch backend.
+    Returns the selected torch.device and the number of requested devices.
     """
 
     if gpuid is not None and not isinstance(gpuid, str):
         gpuid = str(gpuid)
 
-    if gpuid is not None:
-        nb_devices = len(gpuid.split(','))
-    else:
-        nb_devices = 1
+    gpuid = gpuid.strip() if gpuid is not None else None
 
-    if gpuid is not None and (gpuid != '-1'):
-        device = '/gpu:' + gpuid
-        os.environ['CUDA_VISIBLE_DEVICES'] = gpuid
-
-        tf.config.set_soft_device_placement(True)
-        for pd in tf.config.list_physical_devices('GPU'):
-            tf.config.experimental.set_memory_growth(pd, True)
-    else:
-        device = '/cpu:0'
+    if not torch.cuda.is_available():
+        if gpuid not in (None, '', '-1', 'cpu'):
+            warnings.warn(
+                'CUDA devices requested via the --gpu flag, but torch reports no available CUDA '
+                'devices. Falling back to CPU.'
+            )
         os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+        return torch.device('cpu'), 1
 
-    return device, nb_devices
+    if gpuid in (None, '', '-1', 'cpu'):
+        os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+        return torch.device('cpu'), 1
+
+    device_ids = [d.strip() for d in gpuid.split(',') if d.strip()]
+    if not device_ids:
+        os.environ['CUDA_VISIBLE_DEVICES'] = '-1'
+        return torch.device('cpu'), 1
+
+    try:
+        parsed_ids = [int(d) for d in device_ids]
+    except ValueError as exc:  # pragma: no cover
+        raise ValueError(
+            "GPU argument must be a comma-separated list of integer device IDs or '-1'/'cpu'."
+        ) from exc
+
+    available = torch.cuda.device_count()
+    for dev in parsed_ids:
+        if dev < 0 or dev >= available:
+            raise ValueError(
+                f'Requested GPU id {dev}, but only {available} CUDA device(s) are visible.'
+            )
+
+    primary = parsed_ids[0]
+    if len(parsed_ids) > 1:
+        warnings.warn(
+            'Multiple GPUs requested, but multi-GPU execution is not currently implemented in '
+            'this backend. Only the first GPU will be used.'
+        )
+
+    torch.cuda.set_device(primary)
+    os.environ['CUDA_VISIBLE_DEVICES'] = ','.join(str(i) for i in parsed_ids)
+
+    return torch.device(f'cuda:{primary}'), len(parsed_ids)
 
 
 def value_at_location(x, single_vol=False, single_pts=False, force_post_absolute_val=True):

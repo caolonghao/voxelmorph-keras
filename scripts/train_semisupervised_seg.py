@@ -123,7 +123,7 @@ model_dir = args.model_dir
 os.makedirs(model_dir, exist_ok=True)
 
 # tensorflow device handling
-device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
+device, nb_devices = vxm.utils.setup_device(args.gpu)
 
 # unet architecture
 enc_nf = args.enc if args.enc else [16, 32, 32, 32]

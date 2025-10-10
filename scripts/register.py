@@ -50,7 +50,7 @@ parser.add_argument('--multichannel', action='store_true',
 args = parser.parse_args()
 
 # tensorflow device handling
-device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
+device, nb_devices = vxm.utils.setup_device(args.gpu)
 
 # load moving and fixed images
 add_feat_axis = not args.multichannel

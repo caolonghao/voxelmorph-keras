@@ -64,7 +64,7 @@ img_pairs = vxm.py.utils.read_pair_list(args.pairs, prefix=args.img_prefix, suff
 seg_pairs = vxm.py.utils.read_pair_list(args.pairs, prefix=args.seg_prefix, suffix=args.seg_suffix)
 
 # device handling
-device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
+device, nb_devices = vxm.utils.setup_device(args.gpu)
 
 # load seg labels if provided
 labels = np.load(args.labels) if args.labels else None

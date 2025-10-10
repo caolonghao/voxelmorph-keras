@@ -80,8 +80,8 @@ p.add_argument('--feat', type=int, default=64, help='number of feature maps')
 arg = p.parse_args()
 
 
-# TensorFlow
-gpu, num_gpu = vxm.tf.utils.setup_device(arg.gpu)
+# Device configuration
+gpu, num_gpu = vxm.utils.setup_device(arg.gpu)
 assert int(keras.__version__.split('.')[0]) >= 3, f'Keras version {keras.__version__} is not 3 or later'
 
 if num_gpu > 1:

@@ -21,8 +21,6 @@ import os
 import warnings
 import numpy as np
 import neurite as ne
-
-from keras import backend as K
 from keras.layers import Layer
 
 from . import keras_backend as tf
@@ -134,8 +132,8 @@ class SpatialTransformer(Layer):
         """
 
         # necessary for multi-gpu models
-        vol = K.reshape(inputs[0], (-1, *self.imshape))
-        trf = K.reshape(inputs[1], (-1, *self.trfshape))
+        vol = tf.reshape(inputs[0], (-1, *self.imshape))
+        trf = tf.reshape(inputs[1], (-1, *self.trfshape))
 
         # map transform across batch
         if self.single_transform:
@@ -232,7 +230,7 @@ class VecInt(Layer):
         loc_shift = inputs[0]
 
         # necessary for multi-gpu models
-        loc_shift = K.reshape(loc_shift, [-1, *self.inshape[1:]])
+        loc_shift = tf.reshape(loc_shift, [-1, *self.inshape[1:]])
         if hasattr(inputs[0], '_keras_shape'):
             loc_shift._keras_shape = inputs[0]._keras_shape
 

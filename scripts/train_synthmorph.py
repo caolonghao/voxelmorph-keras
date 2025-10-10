@@ -77,8 +77,8 @@ p.add_argument('--dec', type=int, nargs='+', default=[64] * 6, help='U-Net decor
 arg = p.parse_args()
 
 
-# TensorFlow handling
-device, nb_devices = vxm.tf.utils.setup_device(arg.gpu)
+# Device handling
+device, nb_devices = vxm.utils.setup_device(arg.gpu)
 assert np.mod(arg.batch_size, nb_devices) == 0, \
     f'batch size {arg.batch_size} not a multiple of the number of GPUs {nb_devices}'
 assert int(keras.__version__.split('.')[0]) >= 3, f'Keras version {keras.__version__} is not 3 or later'

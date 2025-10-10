@@ -109,8 +109,8 @@ vxm.py.utils.save_volfile(template.squeeze(), os.path.join(model_dir, 'init_temp
 template_shape = template.shape[1:-1]
 nfeats = template.shape[-1]
 
-# tensorflow device handling
-device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
+# device handling    
+device, nb_devices = vxm.utils.setup_device(args.gpu)
 
 # unet architecture
 enc_nf = args.enc if args.enc else [16, 32, 32, 32]

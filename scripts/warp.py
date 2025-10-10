@@ -52,7 +52,7 @@ deform, deform_affine = vxm.py.utils.load_volfile(
     args.warp, add_batch_axis=True, ret_affine=add_feat_axis)
 
 # tensorflow device handling
-device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
+device, nb_devices = vxm.utils.setup_device(args.gpu)
 
 # build transfer model and warp
 with tf.device(device):

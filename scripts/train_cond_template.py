@@ -124,7 +124,7 @@ generator = vxm.generators.conditional_template_creation(train_files, template,
                                                          add_feat_axis=add_feat_axis)
 
 # tensorflow device handling
-device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
+device, nb_devices = vxm.utils.setup_device(args.gpu)
 assert np.mod(args.batch_size, nb_devices) == 0, \
     'Batch size (%d) should be a multiple of the nr of gpus (%d)' % (args.batch_size, nb_devices)
 

@@ -63,7 +63,7 @@ parser.add_argument('--lambda', type=float, dest='lambda_weight', default=0.01,
 args = parser.parse_args()
 
 # tensorflow device handling
-device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
+device, nb_devices = vxm.utils.setup_device(args.gpu)
 
 # load moving and fixed images
 add_feat_axis = not args.multichannel

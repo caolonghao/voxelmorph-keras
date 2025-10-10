@@ -124,7 +124,7 @@ def make_k_functions(vol_shape, mapping, max_feats=None, norm_post=True):
 
 
 # tensorflow device handling
-device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
+device, nb_devices = vxm.utils.setup_device(args.gpu)
 
 with tf.device(device):
 

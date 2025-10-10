@@ -121,8 +121,8 @@ nfeats = sample_shape[-1]
 model_dir = args.model_dir
 os.makedirs(model_dir, exist_ok=True)
 
-# tensorflow device handling
-device, nb_devices = vxm.tf.utils.setup_device(args.gpu)
+# device handling
+device, nb_devices = vxm.utils.setup_device(args.gpu)
 assert np.mod(args.batch_size, nb_devices) == 0, \
     'Batch size (%d) should be a multiple of the nr of gpus (%d)' % (args.batch_size, nb_devices)
 
