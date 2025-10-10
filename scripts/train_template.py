@@ -147,7 +147,9 @@ else:
     raise ValueError('Image loss should be "mse" or "ncc", but found "%s"' % args.image_loss)
 
 # make sure the warped target is compared to the generated atlas and not the input atlas
-neg_loss_func = lambda _, y_pred: image_loss_func(model.references.atlas_tensor, y_pred)
+def neg_loss_func(_, y_pred):
+    atlas = model.references.atlas_layer(y_pred)
+    return image_loss_func(atlas, y_pred)
 
 losses = [image_loss_func, neg_loss_func,
           vxm.losses.MSE().loss, vxm.losses.Grad('l2', loss_mult=2).loss]
@@ -163,8 +165,7 @@ save_callback = keras.callbacks.ModelCheckpoint(
     save_freq=args.steps_per_epoch * 20
 )
 
-model.compile(optimizer=keras.optimizers.Adam(learning_rate=args.lr), loss=losses, loss_weights=weights,
-              run_eagerly=True)
+model.compile(optimizer=keras.optimizers.Adam(learning_rate=args.lr), loss=losses, loss_weights=weights)
 
 # save starting weights
 model.save(save_filename.format(epoch=args.initial_epoch))
