@@ -12,11 +12,21 @@ os.environ['KERAS_BACKEND'] = 'torch'
 
 import numpy as np
 import torch
+torch.autograd.set_detect_anomaly(True)
 import voxelmorph as vxm
 
 from keras import callbacks, ops, optimizers
 
-from . import _torch_utils as cli
+try:
+    from . import _torch_utils as cli
+except ImportError:  # pragma: no cover - allows running as a loose script
+    import pathlib
+    import sys
+
+    _THIS_DIR = pathlib.Path(__file__).resolve().parent
+    if str(_THIS_DIR) not in sys.path:
+        sys.path.insert(0, str(_THIS_DIR))
+    import _torch_utils as cli
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -115,6 +125,16 @@ def build_model(args, inshape, nfeats):
 
 
 def compile_model(model, args):
+    def _atlas_reference(y_pred):
+        atlas_tensor = ops.convert_to_tensor(model.references.atlas_layer.weights[0])
+        if hasattr(y_pred, 'ndim') and hasattr(atlas_tensor, 'ndim'):
+            if atlas_tensor.ndim == y_pred.ndim - 1:
+                if torch is not None and torch.is_tensor(atlas_tensor):
+                    atlas_tensor = atlas_tensor.unsqueeze(0)
+                else:
+                    atlas_tensor = ops.expand_dims(atlas_tensor, axis=0)
+        return atlas_tensor
+
     if args.image_loss == 'ncc':
         image_loss_obj = vxm.losses.NCC()
         image_loss = image_loss_obj.loss
@@ -122,13 +142,7 @@ def compile_model(model, args):
         atlas_loss_obj = vxm.losses.NCC()
 
         def atlas_loss(_, y_pred):
-            atlas_tensor = model.references.atlas_tensor
-            if hasattr(y_pred, 'ndim') and hasattr(atlas_tensor, 'shape'):
-                if y_pred.ndim + 1 == len(atlas_tensor.shape):
-                    if torch.is_tensor(y_pred):
-                        y_pred = torch.unsqueeze(y_pred, dim=-1)
-                    else:
-                        y_pred = ops.expand_dims(y_pred, axis=-1)
+            atlas_tensor = _atlas_reference(y_pred)
             return atlas_loss_obj.loss(atlas_tensor, y_pred)
 
     else:
@@ -136,13 +150,7 @@ def compile_model(model, args):
         image_loss = image_loss_obj.loss
 
         def atlas_loss(_, y_pred):
-            atlas_tensor = model.references.atlas_tensor
-            if hasattr(y_pred, 'ndim') and hasattr(atlas_tensor, 'shape'):
-                if y_pred.ndim + 1 == len(atlas_tensor.shape):
-                    if torch.is_tensor(y_pred):
-                        y_pred = torch.unsqueeze(y_pred, dim=-1)
-                    else:
-                        y_pred = ops.expand_dims(y_pred, axis=-1)
+            atlas_tensor = _atlas_reference(y_pred)
             return image_loss_obj.loss(atlas_tensor, y_pred)
 
     mean_loss = vxm.losses.MSE().loss
