@@ -458,7 +458,15 @@ def vectorized_map(fn: Callable[[TensorLike], TensorLike], elems: TensorLike) ->
 
 def _conv_nd(ndims: int, x: TensorLike, filt: TensorLike, strides: Union[int, Sequence[int]], padding: str) -> TensorLike:
     if isinstance(strides, int):
-        strides = (1,) * ndims
+        strides = (strides,) * ndims
+    else:
+        strides = tuple(strides)
+        if len(strides) == ndims + 2:
+            strides = strides[1:-1]
+    if len(strides) != ndims:
+        raise ValueError(
+            f"Expected {ndims} spatial stride values, received {strides} (ndims={ndims})."
+        )
     return ops.conv(x, filt, strides, padding.upper(), data_format="channels_last")
 
 
