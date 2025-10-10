@@ -215,12 +215,29 @@ def ones_like(x: TensorLike, dtype: Optional[str] = None) -> TensorLike:
     return ops.ones_like(x, dtype=dtype)
 
 
-def eye(num_rows: int, num_cols: Optional[int] = None, dtype: str = float32, batch_shape: Optional[Sequence[int]] = None) -> TensorLike:
-    return ops.eye(num_rows, num_cols=num_cols, dtype=dtype, batch_shape=batch_shape)
+def eye(num_rows: int,
+        num_cols: Optional[int] = None,
+        dtype: str = float32,
+        batch_shape: Optional[Sequence[int]] = None,
+        k: int = 0) -> TensorLike:
+    matrix = ops.eye(num_rows, M=num_cols, k=k, dtype=dtype)
+    if batch_shape:
+        result = matrix
+        for _ in batch_shape:
+            result = ops.expand_dims(result, axis=0)
+        tile_multipliers = tuple(batch_shape) + (1,) * ops.ndim(matrix)
+        result = ops.tile(result, tile_multipliers)
+        return result
+    return matrix
 
 
-def range(start: Union[int, float], limit: Optional[Union[int, float]] = None, delta: Union[int, float] = 1, dtype: Optional[str] = None) -> TensorLike:
-    return ops.arange(start, limit=limit, step=delta, dtype=dtype)
+def range(start: Union[int, float],
+          limit: Optional[Union[int, float]] = None,
+          delta: Union[int, float] = 1,
+          dtype: Optional[str] = None) -> TensorLike:
+    if limit is None:
+        start, limit = 0, start
+    return ops.arange(start, stop=limit, step=delta, dtype=dtype)
 
 
 linspace = ops.linspace
@@ -580,7 +597,11 @@ def is_tensor(x: Any) -> bool:
     return hasattr(x, "shape")
 
 
-TensorShape = Tuple[int, ...]
+class TensorShape(tuple):
+    """Minimal TensorShape placeholder used for compatibility checks."""
+
+    def as_list(self):
+        return list(self)
 
 
 class _Compat:
