@@ -31,6 +31,7 @@ from typing import Optional, Sequence, Tuple, Union
 # third party imports
 import numpy as np
 import torch
+import torch.nn.functional as F
 from keras import ops
 from keras import backend as K
 from keras import layers as KL
@@ -307,14 +308,61 @@ def rescale_dense_transform(transform, factor, interp_method='linear'):
     trf = _to_tensor(transform, dtype=torch.float32)
 
     def _resize(field: torch.Tensor) -> torch.Tensor:
-        resized = ne.utils.resize(field, factor, interp_method=interp_method)
-        return resized * factor
+        tensor = field
+        channels = tensor.shape[-1]
+        added_batch = False
+        if tensor.ndim == channels + 1:
+            tensor = tensor.unsqueeze(0)
+            added_batch = True
+
+        tensor = tensor.movedim(-1, 1)
+        spatial_ndims = tensor.ndim - 2
+
+        if isinstance(factor, (list, tuple)):
+            scale_factors = [float(f) for f in factor]
+            if len(scale_factors) != spatial_ndims:
+                raise ValueError(
+                    f'Expected {spatial_ndims} scale factors, got {len(scale_factors)}'
+                )
+        else:
+            scale_factors = [float(factor)] * spatial_ndims
+
+        if interp_method not in {'linear', 'nearest'}:
+            raise ValueError("interp_method must be 'linear' or 'nearest'")
+
+        mode_map = {
+            (1, 'linear'): 'linear',
+            (2, 'linear'): 'bilinear',
+            (3, 'linear'): 'trilinear',
+        }
+        mode = 'nearest' if interp_method == 'nearest' else mode_map.get((spatial_ndims, 'linear'))
+        if mode is None:
+            raise ValueError(f'Unsupported spatial dims {spatial_ndims} for linear interpolation')
+
+        kwargs = {}
+        if mode != 'nearest':
+            kwargs['align_corners'] = False
+
+        resized = F.interpolate(tensor, scale_factor=scale_factors, mode=mode, **kwargs)
+
+        if isinstance(factor, (list, tuple)):
+            scale_components = torch.tensor(factor, dtype=resized.dtype, device=resized.device)
+        else:
+            scale_components = torch.tensor([factor] * channels, dtype=resized.dtype, device=resized.device)
+
+        scale_components = scale_components.view(1, channels, *([1] * spatial_ndims))
+        resized = resized * scale_components
+
+        resized = resized.movedim(1, -1)
+        if added_batch:
+            resized = resized.squeeze(0)
+        return resized
 
     if trf.ndim == trf.shape[-1] + 1:
         return _resize(trf)
 
-    fields = [_resize(trf[b]) for b in range(trf.shape[0])]
-    return torch.stack(fields, dim=0)
+    fields = _resize(trf)
+    return fields
 
 
 def integrate_vec(vec, time_dep=False, method='ss', **kwargs):
