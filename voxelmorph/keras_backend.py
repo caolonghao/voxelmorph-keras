@@ -14,6 +14,11 @@ from typing import Any, Callable, Iterable, Optional, Sequence, Tuple, Union
 
 import numpy as np
 
+try:  # pragma: no cover - optional dependency when running on non-Torch backends
+    import torch
+except Exception:  # pragma: no cover
+    torch = None
+
 import keras
 from keras import ops
 from keras import random as keras_random
@@ -31,10 +36,67 @@ int64 = "int64"
 __version__ = keras.__version__
 
 
+class _DType:
+    def __init__(self, name: str, np_dtype: Optional[np.dtype] = None):
+        self.name = name
+        if np_dtype is None:
+            try:
+                np_dtype = np.dtype(name)
+            except Exception:  # pragma: no cover
+                if name == 'bfloat16':
+                    np_dtype = np.dtype('float32')
+                else:
+                    np_dtype = np.dtype('float32') if name.startswith('float') else np.dtype('int32')
+        self._np_dtype = np_dtype
+
+    @property
+    def as_numpy_dtype(self) -> np.dtype:
+        return self._np_dtype
+
+    @property
+    def is_floating(self) -> bool:
+        return np.issubdtype(self._np_dtype, np.floating)
+
+    @property
+    def is_integer(self) -> bool:
+        return np.issubdtype(self._np_dtype, np.integer)
+
+    def __str__(self) -> str:  # pragma: no cover
+        return self.name
+
+    def __repr__(self) -> str:  # pragma: no cover
+        return f"_DType(name={self.name!r})"
+
+
 class _DTypes:
     @staticmethod
-    def as_dtype(value: Union[str, np.dtype]) -> str:
-        return np.dtype(value).name
+    def as_dtype(value: Union[str, np.dtype, None, Any]) -> Optional[_DType]:
+        if value is None:
+            return None
+        if isinstance(value, str):
+            short = value.split('.', 1)[-1]
+            try:
+                return _DType(name=np.dtype(short).name)
+            except Exception:  # pragma: no cover
+                return _DType(name=short)
+        if isinstance(value, np.dtype):
+            return _DType(name=value.name, np_dtype=value)
+        if torch is not None and isinstance(value, torch.dtype):
+            name = str(value).split('.', 1)[-1]
+            try:
+                return _DType(name=np.dtype(name).name)
+            except Exception:  # pragma: no cover
+                return _DType(name=name)
+        name = getattr(value, "name", None)
+        if isinstance(name, str) and name:
+            try:
+                return _DType(name=np.dtype(name).name)
+            except Exception:  # pragma: no cover
+                return _DType(name=name)
+        try:
+            return _DType(name=np.dtype(value).name)
+        except Exception:  # pragma: no cover
+            return _DType(name=str(value))
 
 
 dtypes = _DTypes()
@@ -48,18 +110,24 @@ TensorLike = Any
 
 
 def convert_to_tensor(value: Any, dtype: Optional[str] = None) -> TensorLike:
-    return ops.convert_to_tensor(value, dtype=dtype)
+    dtype_obj = dtypes.as_dtype(dtype)
+    dtype_name = dtype_obj.name if isinstance(dtype_obj, _DType) else dtype_obj
+    return ops.convert_to_tensor(value, dtype=dtype_name)
 
 
 def constant(value: Any, dtype: Optional[str] = None) -> TensorLike:
-    return ops.convert_to_tensor(value, dtype=dtype)
+    dtype_obj = dtypes.as_dtype(dtype)
+    dtype_name = dtype_obj.name if isinstance(dtype_obj, _DType) else dtype_obj
+    return ops.convert_to_tensor(value, dtype=dtype_name)
 
 
 as_tensor = convert_to_tensor
 
 
 def cast(x: TensorLike, dtype: str) -> TensorLike:
-    return ops.cast(x, dtype)
+    dtype_obj = dtypes.as_dtype(dtype)
+    dtype_name = dtype_obj.name if isinstance(dtype_obj, _DType) else dtype_obj
+    return ops.cast(x, dtype_name)
 
 
 def reshape(x: TensorLike, shape: Sequence[int]) -> TensorLike:
@@ -108,6 +176,10 @@ def pad(x: TensorLike, paddings: TensorLike, mode: str = "constant", constant_va
 
 def tile(x: TensorLike, multiples: Sequence[int]) -> TensorLike:
     return ops.tile(x, multiples)
+
+
+def broadcast_to(x: TensorLike, shape: Sequence[int]) -> TensorLike:
+    return ops.broadcast_to(x, shape)
 
 
 def gather(params: TensorLike, indices: TensorLike, axis: int = 0) -> TensorLike:
@@ -191,6 +263,20 @@ reduce_any = ops.any
 
 log = ops.log
 exp = ops.exp
+floor = ops.floor
+ceil = ops.ceil
+round = ops.round
+
+
+def reduce_variance(x: TensorLike, axis: Optional[Union[int, Sequence[int]]] = None, keepdims: bool = False) -> TensorLike:
+    mean = ops.mean(x, axis=axis, keepdims=True)
+    squared = ops.square(ops.subtract(x, mean))
+    return ops.mean(squared, axis=axis, keepdims=keepdims)
+
+
+def reduce_std(x: TensorLike, axis: Optional[Union[int, Sequence[int]]] = None, keepdims: bool = False) -> TensorLike:
+    variance = reduce_variance(x, axis=axis, keepdims=keepdims)
+    return ops.sqrt(variance)
 
 
 def reduce_prod(x: TensorLike, axis: Optional[Union[int, Sequence[int]]] = None, keepdims: bool = False) -> TensorLike:
@@ -237,13 +323,20 @@ matrix_transpose = ops.transpose
 
 class _Linalg(types.SimpleNamespace):
     def __init__(self):
+        eigvalsh = getattr(ops.linalg, "eigvalsh", None)
+        if eigvalsh is None:
+            # Keras 3.0 does not expose eigvalsh; synthesize it from eigh.
+            def eigvalsh(x: TensorLike) -> TensorLike:
+                eigenvalues, _ = ops.linalg.eigh(x)
+                return eigenvalues
+
         super().__init__(
             det=ops.linalg.det,
             inv=ops.linalg.inv,
             cholesky=ops.linalg.cholesky,
             norm=ops.linalg.norm,
             eigh=ops.linalg.eigh,
-            eigvalsh=ops.linalg.eigvalsh,
+            eigvalsh=eigvalsh,
             matrix_transpose=ops.transpose,
             diag=ops.diag,
             diag_part=lambda x: ops.diagonal(x, axis1=-2, axis2=-1),
@@ -363,6 +456,64 @@ class _NN(types.SimpleNamespace):
 nn = _NN()
 
 
+def _normalize_axes(axes: Optional[Union[int, Sequence[int]]], ndim: int) -> Tuple[int, ...]:
+    if axes is None:
+        return tuple(range(ndim))
+    if isinstance(axes, int):
+        axes = (axes,)
+    normalized = []
+    for axis in axes:
+        normalized.append(axis if axis >= 0 else ndim + axis)
+    return tuple(normalized)
+
+
+class _Signal(types.SimpleNamespace):
+    def __init__(self):
+        def _shift(direction: int) -> Callable[[TensorLike, Optional[Union[int, Sequence[int]]]], TensorLike]:
+            def _fn(x: TensorLike, axes: Optional[Union[int, Sequence[int]]] = None) -> TensorLike:
+                tensor = ops.convert_to_tensor(x)
+                ndim = len(tensor.shape)
+                target_axes = _normalize_axes(axes, ndim)
+                result = tensor
+                for axis in target_axes:
+                    static_size = result.shape[axis]
+                    if static_size is not None:
+                        shift_val: Union[int, TensorLike] = static_size // 2
+                    else:
+                        dyn_shape = ops.shape(result)
+                        size = dyn_shape[axis]
+                        size_f = ops.cast(size, "float32")
+                        half = ops.floor(ops.divide(size_f, ops.convert_to_tensor(2.0, dtype="float32")))
+                        shift_val = ops.cast(half, "int32")
+                    if direction < 0:
+                        if isinstance(shift_val, int):
+                            shift_val = -shift_val
+                        else:
+                            shift_val = ops.negative(shift_val)
+                    result = ops.roll(result, shift_val, axis)
+                return result
+
+            return _fn
+
+        def _missing(name: str) -> Callable[..., Any]:
+            def _fn(*_args, **_kwargs):  # pragma: no cover
+                raise NotImplementedError(
+                    f"Signal operation '{name}' is not implemented without TensorFlow."
+                )
+
+            return _fn
+
+        super().__init__(
+            fft=_missing("fft"),
+            ifft=_missing("ifft"),
+            fftshift=_shift(+1),
+            ifftshift=_shift(-1),
+        )
+
+
+signal = _Signal()
+
+
 # -----------------------------------------------------------------------------
 # Utility stubs
 # -----------------------------------------------------------------------------
@@ -372,6 +523,8 @@ class _Math(types.SimpleNamespace):
     divide_no_nan = staticmethod(divide_no_nan)
     log = staticmethod(log)
     exp = staticmethod(exp)
+    reduce_std = staticmethod(reduce_std)
+    reduce_variance = staticmethod(reduce_variance)
 
 
 math = _Math()
