@@ -23,6 +23,7 @@ License.
 """
 
 import os
+os.environ.setdefault("KERAS_BACKEND", "torch")
 import random
 import argparse
 import numpy as np

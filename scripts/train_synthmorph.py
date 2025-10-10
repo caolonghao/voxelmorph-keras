@@ -14,6 +14,7 @@
 
 
 import os
+os.environ.setdefault("KERAS_BACKEND", "torch")
 import pickle
 import argparse
 import numpy as np
