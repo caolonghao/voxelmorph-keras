@@ -100,7 +100,7 @@ weights = [1, args.lambda_weight]
 
 # train
 zeros = np.zeros((1, *inshape, len(inshape)), dtype='float32')
-model.compile(optimizer=keras.optimizers.Adam(lr=args.lr), loss=losses, loss_weights=weights)
+model.compile(optimizer=keras.optimizers.Adam(learning_rate=args.lr), loss=losses, loss_weights=weights)
 model.fit(
     [moving],
     [fixed, zeros],

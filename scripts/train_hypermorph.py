@@ -175,7 +175,7 @@ def grad_loss(y_true, y_pred):
     return hyp * vxm.losses.Grad('l2', loss_mult=args.int_downsize).loss(y_true, y_pred)
 
 
-model.compile(optimizer=keras.optimizers.Adam(lr=args.lr), loss=[image_loss, grad_loss])
+model.compile(optimizer=keras.optimizers.Adam(learning_rate=args.lr), loss=[image_loss, grad_loss])
 
 save_callback = keras.callbacks.ModelCheckpoint(
     save_filename,

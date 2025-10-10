@@ -167,7 +167,7 @@ save_callback = keras.callbacks.ModelCheckpoint(
     save_freq=args.steps_per_epoch * 20
 )
 
-model.compile(optimizer=keras.optimizers.Adam(lr=args.lr), loss=losses, loss_weights=weights)
+model.compile(optimizer=keras.optimizers.Adam(learning_rate=args.lr), loss=losses, loss_weights=weights)
 
 # save starting weights
 model.save(save_filename.format(epoch=args.initial_epoch))
