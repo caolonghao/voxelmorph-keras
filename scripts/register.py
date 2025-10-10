@@ -49,7 +49,7 @@ parser.add_argument('--multichannel', action='store_true',
                     help='specify that data has multiple channels')
 args = parser.parse_args()
 
-# tensorflow device handling
+# device handling
 device, nb_devices = vxm.utils.setup_device(args.gpu)
 
 # load moving and fixed images
