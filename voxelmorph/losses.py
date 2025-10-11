@@ -139,11 +139,12 @@ class SSIM:
     Structural similarity (SSIM) loss computed over a local window.
     """
 
-    def __init__(self, win=None, c1=0.01 ** 2, c2=0.03 ** 2, eps=1e-5):
+    def __init__(self, win=None, c1=0.01 ** 2, c2=0.03 ** 2, eps=1e-5, sigma=1.5):
         self.win = win
         self.c1 = c1
         self.c2 = c2
         self.eps = eps
+        self.sigma = sigma
 
     def _prepare_window(self, tensor):
         shape = _shape_list(tensor)
@@ -161,28 +162,46 @@ class SSIM:
             win = [self.win] * ndims
         return ndims, win
 
+    def _make_gaussian_filter(self, win, channels, dtype):
+        coords = [tf.range(size, dtype=dtype) - (size - 1.0) / 2.0 for size in win]
+        grids = tf.meshgrid(*coords, indexing='ij')
+        dist_sq = tf.zeros_like(grids[0], dtype=dtype)
+        for g in grids:
+            dist_sq += tf.square(g)
+
+        sigma_sq = tf.cast(self.sigma ** 2, dtype)
+        kernel = tf.exp(-dist_sq / (2.0 * sigma_sq))
+        kernel /= tf.reduce_sum(kernel)
+
+        kernel = tf.expand_dims(kernel, axis=-1)
+        kernel = tf.expand_dims(kernel, axis=-1)  # (..., 1, 1)
+
+        eye = tf.eye(channels, dtype=dtype)
+        eye_shape = (1,) * len(win) + (channels, channels)
+        eye = tf.reshape(eye, eye_shape)
+
+        return kernel * eye  # broadcast to (..., channels, channels)
+
     def ssim(self, Ii, Ji):
         ndims, win = self._prepare_window(Ii)
 
         conv_fn = getattr(tf.nn, f'conv{ndims}d')
-
+        dtype = Ii.dtype if hasattr(Ii, 'dtype') else tf.float32
+        channels = _shape_list(Ji)[-1]
+        filt = self._make_gaussian_filter(win, channels, dtype)
         I2 = Ii * Ii
         J2 = Ji * Ji
         IJ = Ii * Ji
 
-        channels = _shape_list(Ji)[-1]
-        sum_filt = tf.ones([*win, channels, 1], dtype=Ii.dtype)
         strides = 1 if ndims == 1 else [1] * (ndims + 2)
         padding = 'SAME'
 
-        win_size = float(np.prod(win))
+        mu_I = conv_fn(Ii, filt, strides, padding)
+        mu_J = conv_fn(Ji, filt, strides, padding)
 
-        mu_I = conv_fn(Ii, sum_filt, strides, padding) / win_size
-        mu_J = conv_fn(Ji, sum_filt, strides, padding) / win_size
-
-        sigma_I = conv_fn(I2, sum_filt, strides, padding) / win_size - tf.square(mu_I)
-        sigma_J = conv_fn(J2, sum_filt, strides, padding) / win_size - tf.square(mu_J)
-        sigma_IJ = conv_fn(IJ, sum_filt, strides, padding) / win_size - mu_I * mu_J
+        sigma_I = conv_fn(I2, filt, strides, padding) - tf.square(mu_I)
+        sigma_J = conv_fn(J2, filt, strides, padding) - tf.square(mu_J)
+        sigma_IJ = conv_fn(IJ, filt, strides, padding) - mu_I * mu_J
 
         sigma_I = tf.maximum(sigma_I, self.eps)
         sigma_J = tf.maximum(sigma_J, self.eps)
