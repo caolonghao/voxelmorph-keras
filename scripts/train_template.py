@@ -160,9 +160,11 @@ weights = [args.image_loss_weight, 1 - args.image_loss_weight,
 if nb_devices > 1:
     raise NotImplementedError('Multi-GPU training is not implemented in this Keras backend build.')
 
+epoch_num_to_save = 10
+
 save_callback = keras.callbacks.ModelCheckpoint(
     save_filename,
-    save_freq=args.steps_per_epoch * 20
+    save_freq=args.steps_per_epoch * epoch_num_to_save
 )
 
 model.compile(optimizer=keras.optimizers.Adam(learning_rate=args.lr), loss=losses, loss_weights=weights)
