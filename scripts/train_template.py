@@ -65,7 +65,7 @@ parser.add_argument('--dec', type=int, nargs='+',
 
 # loss hyperparameters
 parser.add_argument('--image-loss', default='ncc',
-                    help='image reconstruction loss - can be mse or ncc (default: ncc)')
+                    help='image reconstruction loss - can be mse, ncc, or ssim (default: ncc)')
 parser.add_argument('--image-loss-weight', type=float, default=1.0,
                     help='relative weight of transformed atlas loss (default: 1.0)')
 parser.add_argument('--mean-loss-weight', type=float, default=1.0,
@@ -143,8 +143,10 @@ if args.image_loss == 'ncc':
     image_loss_func = vxm.losses.NCC().loss
 elif args.image_loss == 'mse':
     image_loss_func = vxm.losses.MSE().loss
+elif args.image_loss == 'ssim':
+    image_loss_func = vxm.losses.SSIM().loss
 else:
-    raise ValueError('Image loss should be "mse" or "ncc", but found "%s"' % args.image_loss)
+    raise ValueError('Image loss should be "mse", "ncc", or "ssim", but found "%s"' % args.image_loss)
 
 # make sure the warped target is compared to the generated atlas and not the input atlas
 def neg_loss_func(_, y_pred):

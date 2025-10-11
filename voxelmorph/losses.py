@@ -134,6 +134,72 @@ class NCC:
         return -cc
 
 
+class SSIM:
+    """
+    Structural similarity (SSIM) loss computed over a local window.
+    """
+
+    def __init__(self, win=None, c1=0.01 ** 2, c2=0.03 ** 2, eps=1e-5):
+        self.win = win
+        self.c1 = c1
+        self.c2 = c2
+        self.eps = eps
+
+    def _prepare_window(self, tensor):
+        shape = _shape_list(tensor)
+        if shape is None:
+            raise ValueError('Tensor shape is unknown; cannot compute SSIM.')
+        ndims = len(shape) - 2
+        if ndims not in (1, 2, 3):
+            raise ValueError(f'SSIM expects volumes with 1–3 spatial dims. Got {ndims}.')
+
+        if self.win is None:
+            win = [9] * ndims
+        elif isinstance(self.win, list):
+            win = self.win
+        else:
+            win = [self.win] * ndims
+        return ndims, win
+
+    def ssim(self, Ii, Ji):
+        ndims, win = self._prepare_window(Ii)
+
+        conv_fn = getattr(tf.nn, f'conv{ndims}d')
+
+        I2 = Ii * Ii
+        J2 = Ji * Ji
+        IJ = Ii * Ji
+
+        channels = _shape_list(Ji)[-1]
+        sum_filt = tf.ones([*win, channels, 1], dtype=Ii.dtype)
+        strides = 1 if ndims == 1 else [1] * (ndims + 2)
+        padding = 'SAME'
+
+        win_size = float(np.prod(win))
+
+        mu_I = conv_fn(Ii, sum_filt, strides, padding) / win_size
+        mu_J = conv_fn(Ji, sum_filt, strides, padding) / win_size
+
+        sigma_I = conv_fn(I2, sum_filt, strides, padding) / win_size - tf.square(mu_I)
+        sigma_J = conv_fn(J2, sum_filt, strides, padding) / win_size - tf.square(mu_J)
+        sigma_IJ = conv_fn(IJ, sum_filt, strides, padding) / win_size - mu_I * mu_J
+
+        sigma_I = tf.maximum(sigma_I, self.eps)
+        sigma_J = tf.maximum(sigma_J, self.eps)
+
+        ssim_numerator = (2.0 * mu_I * mu_J + self.c1) * (2.0 * sigma_IJ + self.c2)
+        ssim_denominator = (tf.square(mu_I) + tf.square(mu_J) + self.c1) * (sigma_I + sigma_J + self.c2)
+
+        return ssim_numerator / tf.maximum(ssim_denominator, self.eps)
+
+    def loss(self, y_true, y_pred):
+        ssim_map = self.ssim(y_true, y_pred)
+        reduce_axes = tuple(range(1, len(ssim_map.shape)))
+        if reduce_axes:
+            ssim_map = tf.reduce_mean(ssim_map, axis=reduce_axes)
+        return 1.0 - ssim_map
+
+
 class MSE:
     """
     Sigma-weighted mean squared error for image reconstruction.
